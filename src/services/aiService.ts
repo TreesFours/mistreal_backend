@@ -5,12 +5,14 @@ const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 export const getAiResponse = async (prompt: string, provider: string, history: any[], user?: any) => {
     const apiKey = process.env.OPENROUTER_API_KEY;
 
-    // Map providers to OpenRouter model strings
-    const model = provider === 'gpt4' ? 'openai/gpt-4-turbo' :
-                  provider === 'claude' ? 'anthropic/claude-3.5-sonnet' :
-                  'google/gemini-pro-1.5';
+    // Flexible mapping for providers
+    const providerLower = provider.toLowerCase();
+    const model = providerLower.includes('gpt4') ? 'openai/gpt-4-turbo' :
+                  providerLower.includes('claude') ? 'anthropic/claude-3.5-sonnet' :
+                  providerLower.includes('gemini') ? 'google/gemini-pro-1.5' :
+                  'google/gemini-pro-1.5'; // Default fallback
 
-    try {
+    console.log(`🤖 AI Request: Provider=${provider}, MappedModel=${model}`);
         const response = await axios.post(
             OPENROUTER_API_URL,
             {
