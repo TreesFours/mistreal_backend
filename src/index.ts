@@ -8,7 +8,7 @@ import { getSocialSummary, createConnectSession } from './services/socialService
 import { createSubscriptionSession, handleWebhook } from './services/stripeService';
 import { getNewsData } from './services/newsService';
 import { getWeatherData } from './services/weatherService';
-import { User, sequelize } from './models/userModel';
+import { User, DelayedAction, sequelize } from './models/userModel';
 import { sendMilestoneEmail } from './utils/mailer';
 
 dotenv.config();
@@ -181,7 +181,6 @@ app.post('/api/payment/webhook', express.raw({ type: 'application/json' }), asyn
 });
 
 // ⏳ Background Worker for Delayed Actions
-import { DelayedAction } from './models/userModel';
 import { sendSocialAction } from './services/socialService';
 
 setInterval(async () => {

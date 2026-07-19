@@ -2,7 +2,7 @@ import axios from 'axios';
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
-export const getAiResponse = async (prompt: string, provider: string, history: any[]) => {
+export const getAiResponse = async (prompt: string, provider: string, history: any[], user?: any) => {
     const apiKey = process.env.OPENROUTER_API_KEY;
 
     // Map providers to OpenRouter model strings
