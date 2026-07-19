@@ -96,7 +96,7 @@ app.get('/api/social/sync', async (req, res) => {
         userToken = user?.zernioUserToken;
     }
 
-    const summary = await getSocialSummary(userToken);
+    const summary = await getSocialSummary(userToken || null);
     res.json(summary);
 });
 
