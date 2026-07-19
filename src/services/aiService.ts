@@ -13,6 +13,8 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
                   'google/gemini-pro-1.5'; // Default fallback
 
     console.log(`🤖 AI Request: Provider=${provider}, MappedModel=${model}`);
+
+    try {
         const response = await axios.post(
             OPENROUTER_API_URL,
             {
