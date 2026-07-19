@@ -6,13 +6,22 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
     const apiKey = process.env.OPENROUTER_API_KEY;
 
     // Flexible mapping for providers
-    const providerLower = provider.toLowerCase();
-    const model = providerLower.includes('gpt4') ? 'openai/gpt-4-turbo' :
-                  providerLower.includes('claude') ? 'anthropic/claude-3.5-sonnet' :
-                  providerLower.includes('gemini') ? 'google/gemini-pro-1.5' :
-                  'google/gemini-pro-1.5'; // Default fallback
+    const providerLower = (provider || 'gemini').toLowerCase();
 
-    console.log(`🤖 AI Request: Provider=${provider}, MappedModel=${model}`);
+    // Explicitly mapping common variants to guaranteed OpenRouter endpoints
+    let model = 'google/gemini-flash-1.5'; // Default safe fallback
+
+    if (providerLower.includes('gpt4')) {
+        model = 'openai/gpt-4-turbo';
+    } else if (providerLower.includes('claude')) {
+        model = 'anthropic/claude-3.5-sonnet';
+    } else if (providerLower.includes('gemini')) {
+        model = 'google/gemini-pro-1.5';
+    }
+
+    console.log(`🤖 AI Request Received:`);
+    console.log(`   - Raw Provider: ${provider}`);
+    console.log(`   - Mapped Model: ${model}`);
 
     try {
         const response = await axios.post(
@@ -27,11 +36,15 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
             {
                 headers: {
                     'Authorization': `Bearer ${apiKey}`,
-                    'HTTP-Referer': 'https://mistreal-assistant.com', // Optional
+                    'HTTP-Referer': 'https://mistreal-assistant.com',
                     'X-Title': 'Mistreal Assistant'
                 }
             }
         );
+
+        if (!response.data || !response.data.choices || response.data.choices.length === 0) {
+            throw new Error('OpenRouter returned an empty response');
+        }
 
         return {
             content: response.data.choices[0].message.content,
@@ -39,12 +52,17 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
             success: true
         };
     } catch (error: any) {
-        console.error('AI Service Error:', error.response?.data || error.message);
+        const errorMessage = error.response?.data?.error?.message || error.message;
+        console.error('❌ AI Service Error:', errorMessage);
+        if (error.response?.data) {
+            console.error('   - Full Error Context:', JSON.stringify(error.response.data));
+        }
+
         return {
             content: '',
             provider: provider,
             success: false,
-            error: error.response?.data?.error?.message || 'AI request failed'
+            error: errorMessage || 'AI request failed'
         };
     }
 };
