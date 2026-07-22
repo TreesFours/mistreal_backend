@@ -4,7 +4,7 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
 import { getAiResponse, getAvailableModels } from './services/aiService';
-import { getSocialSummary, createConnectSession } from './services/socialService';
+import { getSocialSummary, createConnectSession, getAvailablePlatforms } from './services/socialService';
 import { createSubscriptionSession, handleWebhook } from './services/stripeService';
 import { getNewsData } from './services/newsService';
 import { getWeatherData } from './services/weatherService';
@@ -28,18 +28,32 @@ app.use(express.json());
 app.get('/', (req, res) => res.send('🚀 Mistreal Backend Running'));
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date() }));
 
-// 🔍 0. Get Available Models (Dynamic)
+// 🔍 0. Get Available Models (Dynamic & Tiered)
 app.get('/api/models', async (req, res) => {
     const { deviceId } = req.query;
     let isPro = false;
 
     if (DATABASE_URL && deviceId) {
-        const user = await User.findOne({ where: { deviceId } });
+        const user = await User.findOne({ where: { deviceId: deviceId as string } });
         isPro = user?.isPro || false;
     }
 
     const models = await getAvailableModels(isPro);
     res.json(models);
+});
+
+// 📱 0.1 Get Available Social Platforms (Dynamic & Tiered)
+app.get('/api/social/platforms', async (req, res) => {
+    const { deviceId } = req.query;
+    let isPro = false;
+
+    if (DATABASE_URL && deviceId) {
+        const user = await User.findOne({ where: { deviceId: deviceId as string } });
+        isPro = user?.isPro || false;
+    }
+
+    const platforms = await getAvailablePlatforms(isPro);
+    res.json(platforms);
 });
 
 // 🧠 1. AI Chat - Routes requests to OpenRouter or Google Direct

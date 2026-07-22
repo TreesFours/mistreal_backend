@@ -14,10 +14,12 @@ export const getNewsData = async (category: string = 'general', country: string 
         const response = await axios.get(NEWS_API_URL, {
             params: {
                 category,
-                country,
+                country: country.length === 2 ? country : 'us', // Ensure 2-char code
                 apiKey
             }
         });
+
+        // ... rest of the code ...
 
         return {
             articles: response.data.articles.map((article: any) => ({

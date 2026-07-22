@@ -2,6 +2,23 @@ import axios from 'axios';
 
 const ZERNIO_API_URL = 'https://api.zernio.com/v1';
 
+export const getAvailablePlatforms = async (isPro: boolean) => {
+    // In a real Zernio setup, this might call an API.
+    // Here we hardcode based on Zernio's typical offerings.
+    const allPlatforms = [
+        { id: 'twitter', name: 'Twitter', icon: 'public' },
+        { id: 'whatsapp', name: 'WhatsApp', icon: 'chat' },
+        { id: 'instagram', name: 'Instagram', icon: 'camera_alt' },
+        { id: 'linkedin', name: 'LinkedIn', icon: 'work' },
+        { id: 'threads', name: 'Threads', icon: 'alternate_email' }
+    ];
+
+    return allPlatforms.map((p, index) => ({
+        ...p,
+        isProOnly: index > 1 // First 2 are Free, rest are PRO
+    }));
+};
+
 export const getSocialSummary = async (userToken: string | null) => {
     if (!userToken) {
         return {

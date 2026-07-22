@@ -7,9 +7,9 @@ export const getAvailableModels = async (isPro: boolean) => {
     const geminiKey = process.env.GEMINI_API;
     const openRouterKey = process.env.OPENROUTER_API_KEY;
 
-    let models: { id: string, name: string, provider: string }[] = [];
+    let models: { id: string, name: string, provider: string, isProOnly: boolean, price: string }[] = [];
 
-    // 1. Always try to get Gemini models if key is present
+    // 1. Gemini Models (Google Direct) - Generally Free in our app
     if (geminiKey) {
         try {
             const response = await axios.get(`${GOOGLE_AI_URL}?key=${geminiKey}`);
@@ -18,7 +18,9 @@ export const getAvailableModels = async (isPro: boolean) => {
                 .map((m: any) => ({
                     id: m.name.replace('models/', ''),
                     name: m.displayName,
-                    provider: 'google'
+                    provider: 'google',
+                    isProOnly: false,
+                    price: 'Free'
                 }));
             models = [...models, ...geminiModels];
         } catch (error) {
@@ -26,16 +28,18 @@ export const getAvailableModels = async (isPro: boolean) => {
         }
     }
 
-    // 2. If PRO, fetch large models from OpenRouter
-    if (isPro && openRouterKey) {
+    // 2. OpenRouter Models (Premium / Large)
+    if (openRouterKey) {
         try {
             const response = await axios.get('https://openrouter.ai/api/v1/models');
             const premiumModels = response.data.data
-                .filter((m: any) => m.id.includes('claude') || m.id.includes('gpt-4'))
+                .filter((m: any) => m.id.includes('claude') || m.id.includes('gpt-4') || m.id.includes('llama-3'))
                 .map((m: any) => ({
                     id: m.id,
                     name: m.name,
-                    provider: 'openrouter'
+                    provider: 'openrouter',
+                    isProOnly: true,
+                    price: 'PRO'
                 }));
             models = [...models, ...premiumModels];
         } catch (error) {
@@ -45,7 +49,7 @@ export const getAvailableModels = async (isPro: boolean) => {
 
     // Fallback if nothing found
     if (models.length === 0) {
-        models = [{ id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', provider: 'google' }];
+        models = [{ id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', provider: 'google', isProOnly: false, price: 'Free' }];
     }
 
     return models;
