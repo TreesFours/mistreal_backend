@@ -3,7 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
-import { getAiResponse } from './services/aiService';
+import { getAiResponse, getAvailableModels } from './services/aiService';
 import { getSocialSummary, createConnectSession } from './services/socialService';
 import { createSubscriptionSession, handleWebhook } from './services/stripeService';
 import { getNewsData } from './services/newsService';
@@ -17,14 +17,7 @@ const app = express();
 const port = process.env.PORT || 3000;
 const DATABASE_URL = process.env.DATABASE_URL;
 
-// 🗄️ Database Connection
-if (DATABASE_URL) {
-    sequelize.sync()
-        .then(() => console.log('✅ Connected to PostgreSQL & Synced Models'))
-        .catch((err: any) => console.error('❌ PostgreSQL Connection Error:', err));
-} else {
-    console.warn('⚠️ DATABASE_URL not set. Running without persistence.');
-}
+// ... (DB Connection logic)
 
 app.use(helmet());
 app.use(cors());
@@ -35,7 +28,21 @@ app.use(express.json());
 app.get('/', (req, res) => res.send('🚀 Mistreal Backend Running'));
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date() }));
 
-// 🧠 1. AI Chat - Routes requests to OpenRouter (Free/Premium)
+// 🔍 0. Get Available Models (Dynamic)
+app.get('/api/models', async (req, res) => {
+    const { deviceId } = req.query;
+    let isPro = false;
+
+    if (DATABASE_URL && deviceId) {
+        const user = await User.findOne({ where: { deviceId } });
+        isPro = user?.isPro || false;
+    }
+
+    const models = await getAvailableModels(isPro);
+    res.json(models);
+});
+
+// 🧠 1. AI Chat - Routes requests to OpenRouter or Google Direct
 app.post('/api/chat', async (req, res) => {
     const { prompt, provider, history, deviceId } = req.body;
 

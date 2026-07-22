@@ -1,41 +1,101 @@
 import axios from 'axios';
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const GOOGLE_AI_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 
-export const getAiResponse = async (prompt: string, provider: string, history: any[], user?: any) => {
-    const apiKey = process.env.OPENROUTER_API_KEY;
+export const getAvailableModels = async (isPro: boolean) => {
+    const geminiKey = process.env.GEMINI_API;
+    const openRouterKey = process.env.OPENROUTER_API_KEY;
 
-    // Flexible mapping for providers
-    const providerLower = (provider || 'gemini').toLowerCase();
+    let models: { id: string, name: string, provider: string }[] = [];
 
-    // Explicitly mapping common variants to guaranteed OpenRouter endpoints
-    let model = 'google/gemini-flash-1.5'; // Default safe fallback
-
-    if (providerLower.includes('gpt4')) {
-        model = 'openai/gpt-4-turbo';
-    } else if (providerLower.includes('claude')) {
-        model = 'anthropic/claude-3.5-sonnet';
-    } else if (providerLower.includes('gemini')) {
-        model = 'google/gemini-pro-1.5';
+    // 1. Always try to get Gemini models if key is present
+    if (geminiKey) {
+        try {
+            const response = await axios.get(`${GOOGLE_AI_URL}?key=${geminiKey}`);
+            const geminiModels = response.data.models
+                .filter((m: any) => m.supportedGenerationMethods.includes('generateContent'))
+                .map((m: any) => ({
+                    id: m.name.replace('models/', ''),
+                    name: m.displayName,
+                    provider: 'google'
+                }));
+            models = [...models, ...geminiModels];
+        } catch (error) {
+            console.error('Error fetching Gemini models:', error);
+        }
     }
 
-    console.log(`🤖 AI Request Received:`);
-    console.log(`   - Raw Provider: ${provider}`);
-    console.log(`   - Mapped Model: ${model}`);
+    // 2. If PRO, fetch large models from OpenRouter
+    if (isPro && openRouterKey) {
+        try {
+            const response = await axios.get('https://openrouter.ai/api/v1/models');
+            const premiumModels = response.data.data
+                .filter((m: any) => m.id.includes('claude') || m.id.includes('gpt-4'))
+                .map((m: any) => ({
+                    id: m.id,
+                    name: m.name,
+                    provider: 'openrouter'
+                }));
+            models = [...models, ...premiumModels];
+        } catch (error) {
+            console.error('Error fetching OpenRouter models:', error);
+        }
+    }
 
+    // Fallback if nothing found
+    if (models.length === 0) {
+        models = [{ id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', provider: 'google' }];
+    }
+
+    return models;
+};
+
+export const getAiResponse = async (prompt: string, provider: string, history: any[], user?: any) => {
+    const geminiKey = process.env.GEMINI_API;
+    const openRouterKey = process.env.OPENROUTER_API_KEY;
+
+    // 1. Check if it's a direct Google Gemini call
+    const isGoogleModel = !provider.includes('/');
+
+    if (isGoogleModel && geminiKey) {
+        console.log(`🤖 Using Direct Google Gemini API: ${provider}`);
+        try {
+            const response = await axios.post(
+                `${GOOGLE_AI_URL}/${provider}:generateContent?key=${geminiKey}`,
+                {
+                    contents: [{
+                        parts: [{ text: prompt }]
+                    }]
+                }
+            );
+
+            return {
+                content: response.data.candidates[0].content.parts[0].text,
+                provider: provider,
+                success: true
+            };
+        } catch (error: any) {
+            console.error('❌ Direct Gemini Error:', error.message);
+            // Fallback to OpenRouter if direct fails
+        }
+    }
+
+    // 2. Otherwise use OpenRouter
+    console.log(`🤖 Using OpenRouter for: ${provider}`);
     try {
         const response = await axios.post(
             OPENROUTER_API_URL,
             {
-                model: model,
+                model: provider, // Use the provider string directly as the model ID
                 messages: [
-                    ...history,
+                    ...history.map((m: any) => ({ role: m.role, content: m.content })),
                     { role: 'user', content: prompt }
                 ]
             },
             {
                 headers: {
-                    'Authorization': `Bearer ${apiKey}`,
+                    'Authorization': `Bearer ${openRouterKey}`,
                     'HTTP-Referer': 'https://mistreal-assistant.com',
                     'X-Title': 'Mistreal Assistant'
                 }
@@ -54,10 +114,6 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
     } catch (error: any) {
         const errorMessage = error.response?.data?.error?.message || error.message;
         console.error('❌ AI Service Error:', errorMessage);
-        if (error.response?.data) {
-            console.error('   - Full Error Context:', JSON.stringify(error.response.data));
-        }
-
         return {
             content: '',
             provider: provider,
