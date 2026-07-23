@@ -121,12 +121,15 @@ app.get('/api/social/sync', async (req, res) => {
     res.json(summary);
 });
 
-// 🔗 2.1 Connect Socials - Initiates Zernio Connect
-app.post('/api/social/connect', async (req, res) => {
-    const { platform, deviceId } = req.body;
+// 🔗 2.1 Connect Socials - Initiates Zernio Connect (GET for Browser Redirect)
+app.get('/api/social/connect', async (req, res) => {
+    const { platform, deviceId } = req.query;
+    if (!platform) return res.status(400).send("Platform is required");
+
     try {
-        const url = await createConnectSession(platform);
-        res.json({ success: true, url });
+        const url = await createConnectSession(platform as string);
+        // Automatically redirect the browser to Zernio's login page
+        res.redirect(url);
     } catch (error: any) {
         res.status(500).json({ success: false, error: error.message });
     }

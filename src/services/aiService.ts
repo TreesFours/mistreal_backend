@@ -9,8 +9,8 @@ export const getAvailableModels = async (isPro: boolean) => {
 
     let models: { id: string, name: string, provider: string, isProOnly: boolean, price: string }[] = [];
 
-    // 1. Gemini Models (Google Direct) - Generally Free in our app
-    if (geminiKey) {
+    // 1. FREE TIER: Gemini Models (Direct Google API)
+    if (!isPro && geminiKey) {
         try {
             const response = await axios.get(`${GOOGLE_AI_URL}?key=${geminiKey}`);
             const geminiModels = response.data.models
@@ -28,8 +28,8 @@ export const getAvailableModels = async (isPro: boolean) => {
         }
     }
 
-    // 2. OpenRouter Models (Premium / Large)
-    if (openRouterKey) {
+    // 2. PREMIUM TIER: Advanced Models (OpenRouter)
+    if (isPro && openRouterKey) {
         try {
             const response = await axios.get('https://openrouter.ai/api/v1/models');
             const premiumModels = response.data.data
@@ -47,9 +47,13 @@ export const getAvailableModels = async (isPro: boolean) => {
         }
     }
 
-    // Fallback if nothing found
+    // Fallback if nothing found for that tier
     if (models.length === 0) {
-        models = [{ id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', provider: 'google', isProOnly: false, price: 'Free' }];
+        if (isPro) {
+            models = [{ id: 'openai/gpt-4-turbo', name: 'GPT-4 Turbo (PRO)', provider: 'openrouter', isProOnly: true, price: 'PRO' }];
+        } else {
+            models = [{ id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', provider: 'google', isProOnly: false, price: 'Free' }];
+        }
     }
 
     return models;
