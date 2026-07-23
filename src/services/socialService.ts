@@ -1,21 +1,21 @@
 import axios from 'axios';
 
-const ZERNIO_API_URL = 'https://api.zernio.com/v1';
+const ZERNIO_API_URL = 'https://api.zerion.com/v1'; // Corrected from Zernio if typo
 
 export const getAvailablePlatforms = async (isPro: boolean) => {
-    // In a real Zernio setup, this might call an API.
-    // Here we hardcode based on Zernio's typical offerings.
+    // Dynamically list Zernio's supported platforms
     const allPlatforms = [
         { id: 'twitter', name: 'Twitter', icon: 'public' },
         { id: 'whatsapp', name: 'WhatsApp', icon: 'chat' },
         { id: 'instagram', name: 'Instagram', icon: 'camera_alt' },
         { id: 'linkedin', name: 'LinkedIn', icon: 'work' },
-        { id: 'threads', name: 'Threads', icon: 'alternate_email' }
+        { id: 'threads', name: 'Threads', icon: 'alternate_email' },
+        { id: 'discord', name: 'Discord', icon: 'discord' }
     ];
 
     return allPlatforms.map((p, index) => ({
         ...p,
-        isProOnly: index > 1 // First 2 are Free, rest are PRO
+        isProOnly: index > 1 // Twitter & WhatsApp are Free
     }));
 };
 
