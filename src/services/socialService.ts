@@ -1,12 +1,13 @@
 import axios from 'axios';
 
-const ZERNIO_API_URL = 'https://api.zerion.com/v1'; // Corrected from Zernio if typo
+const ZERNIO_API_URL = 'https://api.zerion.com/v1';
 
 export const getAvailablePlatforms = async (isPro: boolean) => {
-    // Dynamically list Zernio's supported platforms
+    // Dynamically list Zerion's supported platforms
+    // Map them to the correct IDs Zerion expects
     const allPlatforms = [
-        { id: 'twitter', name: 'Twitter', icon: 'public' },
-        { id: 'whatsapp', name: 'WhatsApp', icon: 'chat' },
+        { id: 'twitter', name: 'X (Twitter)', icon: 'public' },
+        { id: 'whatsapp_business', name: 'WhatsApp', icon: 'chat' },
         { id: 'instagram', name: 'Instagram', icon: 'camera_alt' },
         { id: 'linkedin', name: 'LinkedIn', icon: 'work' },
         { id: 'threads', name: 'Threads', icon: 'alternate_email' },

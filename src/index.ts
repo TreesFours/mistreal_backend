@@ -128,10 +128,72 @@ app.get('/api/social/connect', async (req, res) => {
 
     try {
         const url = await createConnectSession(platform as string);
+        if (!url) throw new Error("Zernio returned an empty connection URL");
         // Automatically redirect the browser to Zernio's login page
         res.redirect(url);
     } catch (error: any) {
-        res.status(500).json({ success: false, error: error.message });
+        console.error('❌ Social Connect Error:', error.message);
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            hint: "Ensure ZERNIO_API_KEY is valid and the Zernio service is reachable."
+        });
+    }
+});
+
+// 🔗 2.1.1 Social Callback - Handles the redirect from Zernio
+app.get('/api/social/callback', async (req, res) => {
+    const { code, state, deviceId } = req.query; // deviceId should be passed back in state or handled via session
+
+    // Note: In a production app, use 'state' to prevent CSRF and link to the correct device
+    // For now, we'll log it and prepare the token exchange
+    console.log(`📩 Received Zernio callback with code: ${code}`);
+
+    try {
+        // Here you would call Zernio to exchange 'code' for 'userToken'
+        // const userToken = await exchangeCodeForToken(code);
+        // await User.update({ zernioUserToken: userToken }, { where: { deviceId } });
+
+        res.send("<h1>Connection Successful!</h1><p>You can now return to the Mistreal app.</p>");
+    } catch (error: any) {
+        res.status(500).send(`<h1>Connection Failed</h1><p>${error.message}</p>`);
+    }
+});
+
+// 👤 2.1.2 User Settings - Sync Identity and Preferences
+app.post('/api/user/settings', async (req, res) => {
+    const { deviceId, userName, aiPersona, autoReplyDelay } = req.body;
+
+    if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
+
+    try {
+        // Check for duplicate username (if name is provided)
+        if (userName) {
+            const existingUser = await User.findOne({
+                where: {
+                    userName: userName,
+                    deviceId: { [require('sequelize').Op.ne]: deviceId }
+                }
+            });
+            if (existingUser) {
+                return res.status(409).json({ error: 'Username is already taken' });
+            }
+        }
+
+        const [user] = await User.findOrCreate({
+            where: { deviceId },
+            defaults: { deviceId }
+        });
+
+        await user.update({
+            userName: userName || user.userName,
+            preferences: { ...user.preferences, aiPersona: aiPersona || user.preferences?.aiPersona },
+            autoReplyDelay: autoReplyDelay !== undefined ? autoReplyDelay : user.autoReplyDelay
+        });
+
+        res.json({ success: true, user });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
     }
 });
 

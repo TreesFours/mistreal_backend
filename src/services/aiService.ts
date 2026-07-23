@@ -9,8 +9,9 @@ export const getAvailableModels = async (isPro: boolean) => {
 
     let models: { id: string, name: string, provider: string, isProOnly: boolean, price: string }[] = [];
 
-    // 1. FREE TIER: Gemini Models (Direct Google API)
-    if (!isPro && geminiKey) {
+    // 1. FREE TIER: Strictly Gemini Models (Direct Google API)
+    // Only return these if user is NOT pro or we want them as the "Free" option
+    if (geminiKey) {
         try {
             const response = await axios.get(`${GOOGLE_AI_URL}?key=${geminiKey}`);
             const geminiModels = response.data.models
@@ -28,7 +29,8 @@ export const getAvailableModels = async (isPro: boolean) => {
         }
     }
 
-    // 2. PREMIUM TIER: Advanced Models (OpenRouter)
+    // 2. PREMIUM TIER: Strictly OpenRouter Models
+    // Only return these if user is PRO
     if (isPro && openRouterKey) {
         try {
             const response = await axios.get('https://openrouter.ai/api/v1/models');
@@ -41,10 +43,18 @@ export const getAvailableModels = async (isPro: boolean) => {
                     isProOnly: true,
                     price: 'PRO'
                 }));
-            models = [...models, ...premiumModels];
+
+            // If user is PRO, we ONLY show OpenRouter models (even if they include Gemini via OpenRouter)
+            // as per user requirement.
+            return premiumModels;
         } catch (error) {
             console.error('Error fetching OpenRouter models:', error);
         }
+    }
+
+    // If NOT pro, ONLY show Gemini models
+    if (!isPro) {
+        return models.filter(m => m.provider === 'google');
     }
 
     // Fallback if nothing found for that tier
