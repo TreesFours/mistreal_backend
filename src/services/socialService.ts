@@ -3,8 +3,6 @@ import axios from 'axios';
 const ZERNIO_API_URL = 'https://api.zerion.com/v1';
 
 export const getAvailablePlatforms = async (isPro: boolean) => {
-    // Dynamically list Zerion's supported platforms
-    // Map them to the correct IDs Zerion expects
     const allPlatforms = [
         { id: 'twitter', name: 'X (Twitter)', icon: 'public' },
         { id: 'whatsapp_business', name: 'WhatsApp', icon: 'chat' },
@@ -57,28 +55,41 @@ export const getSocialSummary = async (userToken: string | null) => {
         const rawContent = items.map((item: any) => `[${item.platform}] ${item.author}: ${item.content}`).join('\n');
 
         return {
-            summary: `You have ${items.length} new interactions.`,
+            summary: `You have ${items.interactionCount || items.length} new interactions.`,
             platformUpdates,
             rawContent
         };
     } catch (error: any) {
-        console.error('Zernio Service Error:', error.message);
+        console.error('Zernio Service Error:', error.response?.data || error.message);
         return { summary: "CONNECTION_ERROR", platformUpdates: [], rawContent: "" };
     }
 };
 
 export const createConnectSession = async (platform: string) => {
     const apiKey = process.env.ZERNIO_API_KEY;
+    if (!apiKey) {
+        throw new Error('ZERNIO_API_KEY is missing in backend environment variables');
+    }
+
+    const appUrl = process.env.APP_URL || 'https://mistreal-backend.onrender.com';
+
     try {
         const response = await axios.post(`${ZERNIO_API_URL}/connect`, {
             platform,
-            redirect_url: `${process.env.APP_URL || 'http://localhost:3000'}/api/social/callback`
+            redirect_url: `${appUrl}/api/social/callback`
         }, {
             headers: { 'Authorization': `Bearer ${apiKey}` }
         });
+
+        if (!response.data || !response.data.url) {
+            throw new Error('Zernio API did not return a session URL');
+        }
+
         return response.data.url;
     } catch (error: any) {
-        throw new Error('Failed to create Zernio session');
+        const msg = error.response?.data?.error || error.message;
+        console.error('Zernio Connect Error:', msg);
+        throw new Error(`Failed to create Zernio session: ${msg}`);
     }
 };
 
