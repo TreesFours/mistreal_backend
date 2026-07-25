@@ -1,6 +1,6 @@
 import winston from 'winston';
 
-const scrubber = winston.format((info) => {
+const scrubber = winston.format((info: any) => {
     const sensitiveKeys = ['zernioUserToken', 'content', 'prompt', 'audioData', 'imageDatas', 'purchaseToken'];
 
     if (info.level === 'error') {

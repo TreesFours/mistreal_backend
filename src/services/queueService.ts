@@ -25,6 +25,6 @@ const worker = new Worker('socialActions', async (job: Job) => {
     }
 }, { connection });
 
-worker.on('failed', (job, err) => {
+worker.on('failed', (job: Job | undefined, err: Error) => {
     logger.error(`🚨 Job ${job?.id} failed permanently:`, err.message);
 });
