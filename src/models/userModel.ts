@@ -14,6 +14,7 @@ const sequelize = new Sequelize(process.env.DATABASE_URL!, {
 export class User extends Model {
     public id!: number;
     public deviceId!: string;
+    public firebaseUid!: string; // Real permanent ID
     public isPro!: boolean;
     public subscriptionTier!: string;
     public lastSocialSync!: Date | null;
@@ -25,12 +26,21 @@ export class User extends Model {
     public lastResetDate!: Date;
     public autoReplyDelay!: number; // in minutes
     public vipList!: string[]; // array of usernames/ids
+    public guardianEnabled!: boolean;
+    public emergencyContacts!: any[]; // [{name, type, value}] where type is 'phone', 'email', 'social'
+    public connectedPlatforms!: string[]; // List of platform IDs user has connected
+    public unreadMessagesCount!: number;
 }
 
 User.init({
     deviceId: {
         type: DataTypes.STRING,
         allowNull: false,
+        unique: true
+    },
+    firebaseUid: {
+        type: DataTypes.STRING,
+        allowNull: true,
         unique: true
     },
     isPro: {
@@ -76,6 +86,22 @@ User.init({
     vipList: {
         type: DataTypes.ARRAY(DataTypes.STRING),
         defaultValue: []
+    },
+    guardianEnabled: {
+        type: DataTypes.BOOLEAN,
+        defaultValue: false
+    },
+    emergencyContacts: {
+        type: DataTypes.JSONB,
+        defaultValue: []
+    },
+    connectedPlatforms: {
+        type: DataTypes.ARRAY(DataTypes.STRING),
+        defaultValue: []
+    },
+    unreadMessagesCount: {
+        type: DataTypes.INTEGER,
+        defaultValue: 0
     }
 }, {
     sequelize,

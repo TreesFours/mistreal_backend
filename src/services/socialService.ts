@@ -4,18 +4,16 @@ const ZERNIO_API_URL = 'https://api.zerion.com/v1';
 
 export const getAvailablePlatforms = async (isPro: boolean) => {
     const allPlatforms = [
-        { id: 'twitter', name: 'X (Twitter)', icon: 'public' },
-        { id: 'whatsapp_business', name: 'WhatsApp', icon: 'chat' },
-        { id: 'instagram', name: 'Instagram', icon: 'camera_alt' },
-        { id: 'linkedin', name: 'LinkedIn', icon: 'work' },
-        { id: 'threads', name: 'Threads', icon: 'alternate_email' },
-        { id: 'discord', name: 'Discord', icon: 'discord' }
+        { id: 'twitter', name: 'X (Twitter)', icon: 'public', isProOnly: false },
+        { id: 'whatsapp_business', name: 'WhatsApp', icon: 'chat', isProOnly: false },
+        { id: 'instagram', name: 'Instagram', icon: 'camera_alt', isProOnly: true },
+        { id: 'linkedin', name: 'LinkedIn', icon: 'work', isProOnly: true },
+        { id: 'threads', name: 'Threads', icon: 'alternate_email', isProOnly: true },
+        { id: 'discord', name: 'Discord', icon: 'discord', isProOnly: true }
     ];
 
-    return allPlatforms.map((p, index) => ({
-        ...p,
-        isProOnly: index > 1 // Twitter & WhatsApp are Free
-    }));
+    if (isPro) return allPlatforms;
+    return allPlatforms.filter(p => !p.isProOnly);
 };
 
 export const getSocialSummary = async (userToken: string | null) => {
