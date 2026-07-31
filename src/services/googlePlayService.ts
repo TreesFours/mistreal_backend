@@ -12,7 +12,8 @@ export const verifyPurchase = async (packageName: string, productId: string, pur
         const client = await auth.getClient();
         google.options({ auth: client as any });
 
-        const response = await publisher.subscriptions.get({
+        // Use any to bypass TS error if type definitions are out of sync
+        const response = await (publisher as any).purchases.subscriptions.get({
             packageName,
             subscriptionId: productId,
             token: purchaseToken,
