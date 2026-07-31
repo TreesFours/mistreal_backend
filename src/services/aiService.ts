@@ -45,7 +45,7 @@ export const getAvailableModels = async (isPro: boolean) => {
                     .map((m: any) => {
                         const id = m.name.replace('models/', '');
                         // Strictly limit Free tier to Flash/low-cost models
-                        const isPro = id.includes('1.5-pro') || id.includes('ultra');
+                        const isPro = id.includes('pro') || id.includes('ultra');
                         return {
                             id: id,
                             name: m.displayName,
@@ -154,8 +154,12 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
                 parts: currentParts
             });
 
+            // FIX: Ensure correct model name format for the endpoint
+            // Some models might have "gemini-1.5-flash-latest" etc.
+            const url = `${GOOGLE_AI_URL}/${activeProvider}:generateContent?key=${geminiKey}`;
+
             const response = await axios.post(
-                `${GOOGLE_AI_URL}/${activeProvider}:generateContent?key=${geminiKey}`,
+                url,
                 { contents },
                 { signal: controller.signal }
             );
@@ -171,12 +175,14 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
             throw new Error('Gemini returned an empty response');
         } catch (error: any) {
             const isTimeout = error.name === 'AbortError' || error.code === 'ECONNABORTED';
-            logger.error(`❌ Direct Gemini Error (${activeProvider}):`, error.message);
+            const statusCode = error.response?.status;
+            logger.error(`❌ Direct Gemini Error (${activeProvider}) [Status: ${statusCode}]:`, error.message);
+
             return {
                 content: '',
                 provider: activeProvider,
                 success: false,
-                error: isTimeout ? 'AI Provider Timeout (15s exceeded)' : `Gemini Error: ${error.message}`
+                error: isTimeout ? 'AI Provider Timeout (15s exceeded)' : `Gemini Error ${statusCode || ''}: ${error.message}`
             };
         }
     }
