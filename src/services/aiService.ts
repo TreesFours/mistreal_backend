@@ -31,7 +31,7 @@ const isOpenRouterBreakerTripped = () => {
 
 /**
  * 📡 Dynamic Model Registry
- * Fetches models directly from Google.
+ * Fetches models directly from Google with professional caching.
  */
 let cachedGeminiModels: any[] = [];
 let lastFetchTime = 0;
@@ -53,12 +53,9 @@ export const getLiveGeminiModels = async () => {
         const response = await axios.get(`${GOOGLE_AI_BASE_URL}/models?key=${geminiKey}`);
         const allModels = response.data.models || [];
 
-        // Log the discovery for professional auditing in Render console
-        const supportedNames = allModels
-            .filter((m: any) => m.supportedGenerationMethods.includes('generateContent'))
-            .map((m: any) => m.name.replace('models/', ''));
-
-        logger.info(`📡 Gemini Model Discovery: Found ${supportedNames.length} active generation models.`);
+        // 🔍 DEBUG: Log all found models to Render console for auditing
+        const modelSummary = allModels.map((m: any) => m.name.replace('models/', '')).join(', ');
+        logger.info(`📡 Discovered Google Models: [${modelSummary}]`);
 
         cachedGeminiModels = allModels;
         lastFetchTime = now;
@@ -70,48 +67,52 @@ export const getLiveGeminiModels = async () => {
 };
 
 /**
- * 🎯 The "Smart Picker" (Zero-Hardcode Logic)
- * Scans the live list and picks the absolute best model based on capabilities.
+ * 🎯 The "Stable-First" Picker
+ * Strictly prefers 'latest' aliases to avoid 'deprecated' or 'no longer available' errors.
  */
 export const resolveBestGeminiModel = async (requestedId: string, isPro: boolean = false) => {
     const liveModels = await getLiveGeminiModels();
 
-    // Filter for models that support the core functions we need (Chat, Image, Summarize)
+    // Filter for models that support general chat and aren't experimental/tuning
     const candidates = liveModels.filter((m: any) =>
         m.supportedGenerationMethods.includes('generateContent') &&
-        !m.name.includes('vision') // Vision is deprecated in favor of multimodal Flash/Pro
+        !m.name.includes('vision') &&
+        !m.name.includes('tunedModels') &&
+        !m.name.includes('experimental')
     );
 
     const getCleanId = (name: string) => name.replace('models/', '');
 
-    // 1. If the user specifically requested a model that EXISTS and is SUPPORTED, use it.
-    const exactMatch = candidates.find(m => getCleanId(m.name) === requestedId);
-    if (exactMatch) return requestedId;
-
-    // 2. Proactive "Best Fit" Logic
+    // 1. PRO TIER - Seek the smartest Pro model
     if (isPro) {
-        // Pick the most advanced Pro model available (e.g. 1.5-pro, 2.0-pro)
-        const bestPro = candidates
-            .filter(m => m.name.toLowerCase().includes('pro'))
-            .sort((a, b) => b.name.localeCompare(a.name))[0];
+        const proModels = candidates.filter(m => m.name.toLowerCase().includes('pro'));
+        // Prefer stable "latest" pointer
+        const latestPro = proModels.find(m => m.name.endsWith('latest')) ||
+                        proModels.sort((a, b) => b.name.localeCompare(a.name))[0];
 
-        if (bestPro) return getCleanId(bestPro.name);
+        if (latestPro) {
+            const resolved = getCleanId(latestPro.name);
+            logger.info(`💎 PRO Route: ${requestedId} -> ${resolved}`);
+            return resolved;
+        }
     }
 
-    // 3. FREE TIER / DEFAULT: Pick the most advanced Flash model
-    // This handles version jumps like 1.5 -> 2.0 automatically.
-    const bestFlash = candidates
-        .filter(m => m.name.toLowerCase().includes('flash'))
-        .sort((a, b) => b.name.localeCompare(a.name))[0];
+    // 2. FREE TIER / DEFAULT - Seek the best Flash model
+    const flashModels = candidates.filter(m => m.name.toLowerCase().includes('flash'));
+
+    // 🚀 CRITICAL FIX: Prefer "latest" pointer to bypass Google's "deprecated" versions
+    const bestFlash = flashModels.find(m => m.name.endsWith('flash-latest')) ||
+                     flashModels.find(m => m.name.includes('1.5-flash')) ||
+                     flashModels.sort((a, b) => b.name.localeCompare(a.name))[0];
 
     if (bestFlash) {
         const resolved = getCleanId(bestFlash.name);
-        logger.info(`🔄 Auto-Routing: ${requestedId} -> ${resolved} (Using latest live Flash model)`);
+        logger.info(`⚡ FLASH Route: ${requestedId} -> ${resolved}`);
         return resolved;
     }
 
-    // 4. Absolute Fallback: Use gemini-1.5-flash-latest (Google's canonical pointer)
-    // We only reach here if discovery returned ZERO models.
+    // 3. Absolute Canonical Fallback
+    logger.warn(`⚠️ Discovery found no Flash models. Falling back to canonical ID.`);
     return "gemini-1.5-flash-latest";
 };
 
@@ -123,7 +124,10 @@ export const getAvailableModels = async (isPro: boolean) => {
 
     if (geminiModels.length > 0) {
         models = geminiModels
-            .filter((m: any) => m.supportedGenerationMethods.includes('generateContent'))
+            .filter((m: any) =>
+                m.supportedGenerationMethods.includes('generateContent') &&
+                !m.name.includes('tunedModels')
+            )
             .map((m: any) => {
                 const id = m.name.replace('models/', '');
                 const isProModel = id.includes('pro') || id.includes('ultra');
@@ -178,7 +182,7 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
     const isGoogleModel = !activeProvider.includes('/');
 
     if (!isGoogleModel && isOpenRouterBreakerTripped()) {
-        logger.warn(`⚠️ OpenRouter failures detected. Forcing high-availability Flash model.`);
+        logger.warn(`⚠️ OpenRouter failures. Forcing Flash model.`);
         activeProvider = 'gemini';
     }
 
@@ -187,10 +191,8 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
-            // 🧠 RESOLVE OPTIMAL MODEL PROACTIVELY
+            // 🧠 RESOLVE OPTIMAL STABLE MODEL
             const targetModel = await resolveBestGeminiModel(activeProvider, user?.isPro);
-
-            logger.info(`🤖 Requesting Gemini Model: ${targetModel}`);
 
             const contents = history.map((m: any) => ({
                 role: m.role === 'assistant' ? 'model' : 'user',
@@ -209,7 +211,6 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
 
             contents.push({ role: 'user', parts: currentParts });
 
-            // 🚀 BUILD ENDPOINT URL
             const url = `${GOOGLE_AI_BASE_URL}/models/${targetModel}:generateContent?key=${geminiKey}`;
 
             const response = await axios.post(url, { contents }, { signal: controller.signal });
@@ -239,7 +240,6 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
         }
     }
 
-    // OpenRouter Logic...
     if (!openRouterKey) return { success: false, error: "AI Key missing." };
 
     logger.info(`🤖 Using OpenRouter for: ${activeProvider}`);
