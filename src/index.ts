@@ -68,8 +68,27 @@ app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date() 
 
 // 🧠 1. AI Chat - Professional Multipart Streaming
 app.post('/api/chat', upload.fields([{ name: 'images', maxCount: 5 }, { name: 'audio', maxCount: 1 }]), async (req, res) => {
-    const { prompt, provider, history, deviceId, contextMetadata } = req.body;
+    let { prompt, provider, history, deviceId, contextMetadata } = req.body;
     const files = req.files as { images?: Express.Multer.File[], audio?: Express.Multer.File[] };
+
+    // 🛠️ MULTIPART JSON PARSING: Retrofit sends JSON as a string in multipart requests.
+    // We must parse 'history' and 'contextMetadata' if they arrive as strings.
+    if (typeof history === 'string') {
+        try {
+            history = JSON.parse(history);
+        } catch (e) {
+            console.error("Failed to parse history JSON:", e);
+            history = [];
+        }
+    }
+
+    if (typeof contextMetadata === 'string') {
+        try {
+            contextMetadata = JSON.parse(contextMetadata);
+        } catch (e) {
+            // If it's not JSON, just keep it as a string context
+        }
+    }
 
     if (!prompt && !files?.audio) {
         return res.status(400).json({ success: false, error: 'Prompt or audio is required' });
