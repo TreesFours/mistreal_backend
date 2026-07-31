@@ -5,6 +5,15 @@ const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const GOOGLE_AI_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 
 const FAILURE_THRESHOLD = 3;
+
+// 📦 Professional Multipart File Handlers
+export const extractImageData = (file: Express.Multer.File): string => {
+    return file.buffer.toString('base64');
+};
+
+export const extractAudioData = (file: Express.Multer.File): string => {
+    return file.buffer.toString('base64');
+};
 const BREAKER_COOLDOWN_MS = 60000;
 const REQUEST_TIMEOUT_MS = 15000;
 
@@ -21,7 +30,7 @@ const isOpenRouterBreakerTripped = () => {
 };
 
 export const getAvailableModels = async (isPro: boolean) => {
-    const geminiKey = process.env.GEMINI_API;
+    const geminiKey = process.env.GEMINI_API_KEY || process.env.GEMINI_API;
     const openRouterKey = process.env.OPENROUTER_API_KEY;
 
     let models: { id: string, name: string, provider: string, isProOnly: boolean, price: string }[] = [];
@@ -92,7 +101,7 @@ export const getAvailableModels = async (isPro: boolean) => {
 };
 
 export const getAiResponse = async (prompt: string, provider: string, history: any[], user?: any, imageDatas?: string[], audioData?: string) => {
-    const geminiKey = process.env.GEMINI_API;
+    const geminiKey = process.env.GEMINI_API_KEY || process.env.GEMINI_API;
     const openRouterKey = process.env.OPENROUTER_API_KEY;
 
     // 1. Check if it's a Gemini model (Google Direct)

@@ -3,7 +3,7 @@ import axios from 'axios';
 const NEWS_API_URL = 'https://newsapi.org/v2/top-headlines';
 
 export const getNewsData = async (category: string = 'general', country: string = 'us') => {
-    const apiKey = process.env.NEWS_API_KEY;
+    const apiKey = process.env.NEWSAPI_KEY || process.env.NEWS_API_KEY;
 
     if (!apiKey) {
         console.warn('NEWS_API_KEY is not set. Returning empty news.');

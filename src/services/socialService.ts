@@ -1,26 +1,44 @@
 import axios from 'axios';
 
-const ZERNIO_API_URL = 'https://api.zerion.com/v1';
+const ZERNIO_API_URL = 'https://api.zernio.io/v1'; // Research confirms .io is the production URL
+
+/**
+ * Professional Platform Registry (Backend-Only)
+ * This allows the backend to enrich dynamic platform data before sending to frontend.
+ * If Zernio adds a platform NOT in this list, the frontend will still render it
+ * using capitalization and a default icon, maintaining 100% dynamic behavior.
+ */
+const PLATFORM_REGISTRY: Record<string, { name: string, icon: string, color: string }> = {
+    'twitter': { name: 'X (Twitter)', icon: '🐦', color: '#1DA1F2' },
+    'x': { name: 'X (Twitter)', icon: '🐦', color: '#1DA1F2' },
+    'whatsapp_business': { name: 'WhatsApp', icon: '💬', color: '#25D366' },
+    'whatsapp': { name: 'WhatsApp', icon: '💬', color: '#25D366' },
+    'instagram': { name: 'Instagram', icon: '📷', color: '#E4405F' },
+    'facebook': { name: 'Facebook', icon: 'f', color: '#1877F2' },
+    'telegram': { name: 'Telegram', icon: '🤖', color: '#0088cc' },
+    'reddit': { name: 'Reddit', icon: 'r/', color: '#FF4500' },
+    'linkedin': { name: 'LinkedIn', icon: 'in', color: '#0A66C2' }
+};
 
 export const getAvailablePlatforms = async (isPro: boolean) => {
-    const allPlatforms = [
-        { id: 'twitter', name: 'X (Twitter)', icon: 'public', isProOnly: false },
-        { id: 'whatsapp_business', name: 'WhatsApp', icon: 'chat', isProOnly: false },
-        { id: 'instagram', name: 'Instagram', icon: 'camera_alt', isProOnly: true },
-        { id: 'linkedin', name: 'LinkedIn', icon: 'work', isProOnly: true },
-        { id: 'threads', name: 'Threads', icon: 'alternate_email', isProOnly: true },
-        { id: 'discord', name: 'Discord', icon: 'discord', isProOnly: true }
-    ];
+    // In a truly dynamic system, we'd fetch these from Zernio
+    const allPlatforms = Object.entries(PLATFORM_REGISTRY).map(([id, meta]) => ({
+        id,
+        name: meta.name,
+        icon: meta.icon,
+        isProOnly: !['twitter', 'whatsapp_business', 'x'].includes(id)
+    }));
 
     if (isPro) return allPlatforms;
     return allPlatforms.filter(p => !p.isProOnly);
 };
 
-export const getSocialSummary = async (userToken: string | null) => {
+export const getSocialSummary = async (userToken: string | null, isPro: boolean = false) => {
     if (!userToken) {
         return {
             summary: "CONNECTION_REQUIRED",
             platformUpdates: [],
+            posts: [],
             rawContent: ""
         };
     }
@@ -30,11 +48,22 @@ export const getSocialSummary = async (userToken: string | null) => {
             headers: { 'Authorization': `Bearer ${userToken}` }
         });
 
-        const items = response.data.items || [];
+        let items = response.data.items || [];
+
+        // 🛡️ TIER-BASED FILTERING: Zernio unifies ALL messages in one inbox.
+        // If user is Free, we filter the inbox to only show the two allowed platforms.
+        if (!isPro) {
+            const allowedFreePlatforms = ['twitter', 'x', 'whatsapp', 'whatsapp_business'];
+            items = items.filter((item: any) =>
+                allowedFreePlatforms.includes(item.platform.toLowerCase())
+            );
+        }
+
         if (items.length === 0) {
             return {
                 summary: "Your social feeds are quiet right now.",
                 platformUpdates: [],
+                posts: [],
                 rawContent: ""
             };
         }
@@ -44,22 +73,59 @@ export const getSocialSummary = async (userToken: string | null) => {
             platformCounts[item.platform] = (platformCounts[item.platform] || 0) + 1;
         });
 
-        const platformUpdates = Object.keys(platformCounts).map(platform => ({
-            platform,
-            count: platformCounts[platform],
-            recentMessage: items.find((i: any) => i.platform === platform)?.content
-        }));
+        // 🧠 Dynamic Enrichment Logic
+        const platformUpdates = Object.keys(platformCounts).map(platformId => {
+            const meta = PLATFORM_REGISTRY[platformId.toLowerCase()] || {
+                name: platformId.charAt(0).toUpperCase() + platformId.slice(1),
+                icon: '🔗',
+                color: '#6B4CFF'
+            };
+
+            return {
+                platform: platformId,
+                count: platformCounts[platformId],
+                recentMessage: items.find((i: any) => i.platform === platformId)?.content,
+                platformIcon: meta.icon,
+                platformColor: meta.color,
+                platformDisplayName: meta.name
+            };
+        });
+
+        // Map full posts with metadata
+        const posts = items.map((item: any) => {
+            const meta = PLATFORM_REGISTRY[item.platform.toLowerCase()] || {
+                name: item.platform,
+                icon: '🔗',
+                color: '#6B4CFF'
+            };
+
+            return {
+                id: item.id,
+                platform: item.platform,
+                author: item.author || 'Unknown',
+                content: item.content || '',
+                timestamp: item.timestamp || new Date().toISOString(),
+                imageUrl: item.image_url || null,
+                likes: item.likes,
+                comments: item.comments,
+                sourceUrl: item.source_url,
+                platformIcon: meta.icon,
+                platformColor: meta.color,
+                platformDisplayName: meta.name
+            };
+        });
 
         const rawContent = items.map((item: any) => `[${item.platform}] ${item.author}: ${item.content}`).join('\n');
 
         return {
-            summary: `You have ${items.interactionCount || items.length} new interactions.`,
+            summary: `You have ${items.length} new interactions across ${platformUpdates.length} platforms.`,
             platformUpdates,
+            posts,
             rawContent
         };
     } catch (error: any) {
         console.error('Zernio Service Error:', error.response?.data || error.message);
-        return { summary: "CONNECTION_ERROR", platformUpdates: [], rawContent: "" };
+        return { summary: "CONNECTION_ERROR", platformUpdates: [], posts: [], rawContent: "" };
     }
 };
 

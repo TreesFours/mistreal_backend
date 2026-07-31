@@ -1,15 +1,5 @@
-import { Sequelize, DataTypes, Model } from 'sequelize';
-
-const sequelize = new Sequelize(process.env.DATABASE_URL!, {
-    dialect: 'postgres',
-    logging: false,
-    dialectOptions: {
-        ssl: {
-            require: true,
-            rejectUnauthorized: false
-        }
-    }
-});
+import { DataTypes, Model } from 'sequelize';
+import { sequelize } from '../db';
 
 export class User extends Model {
     public id!: number;
@@ -105,7 +95,8 @@ User.init({
     }
 }, {
     sequelize,
-    modelName: 'User'
+    modelName: 'User',
+    tableName: 'Users' // Explicitly set table name
 });
 
 export class DelayedAction extends Model {
@@ -129,7 +120,8 @@ DelayedAction.init({
     status: { type: DataTypes.STRING, defaultValue: 'pending' }
 }, {
     sequelize,
-    modelName: 'DelayedAction'
+    modelName: 'DelayedAction',
+    tableName: 'DelayedActions'
 });
 
 export { sequelize };
