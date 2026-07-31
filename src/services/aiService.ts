@@ -29,37 +29,108 @@ const isOpenRouterBreakerTripped = () => {
     return false;
 };
 
-export const getAvailableModels = async (isPro: boolean) => {
+/**
+ * 📡 Dynamic Model Caching
+ * Ensures we aren't hitting the model list API on every chat message,
+ * but still keeps it fresh enough to handle Google updates.
+ */
+let cachedGeminiModels: any[] = [];
+let lastFetchTime = 0;
+const CACHE_TTL = 3600000; // 1 hour
+
+export const getLiveGeminiModels = async () => {
     const geminiKey = process.env.GEMINI_API_KEY || process.env.GEMINI_API;
+    if (!geminiKey) return [];
+
+    const now = Date.now();
+    if (cachedGeminiModels.length > 0 && (now - lastFetchTime < CACHE_TTL)) {
+        return cachedGeminiModels;
+    }
+
+    try {
+        const response = await axios.get(`${GOOGLE_AI_BASE_URL}/models?key=${geminiKey}`);
+        cachedGeminiModels = response.data.models || [];
+        lastFetchTime = now;
+        logger.info(`📡 Gemini Model Registry Synchronized (${cachedGeminiModels.length} models)`);
+        return cachedGeminiModels;
+    } catch (error: any) {
+        logger.error("❌ Failed to fetch live Gemini models:", error.message);
+        return cachedGeminiModels; // Return stale cache if fetch fails
+    }
+};
+
+/**
+ * 🧠 Best-Fit Model Resolver
+ * Proactively scans the live list and picks the most capable model
+ * for the user's tier.
+ */
+export const resolveBestGeminiModel = async (requestedId: string, isPro: boolean = false) => {
+    const liveModels = await getLiveGeminiModels();
+
+    // Filter for models that support Content Generation
+    const supported = liveModels.filter((m: any) => m.supportedGenerationMethods.includes('generateContent'));
+
+    if (supported.length === 0) {
+        logger.warn(`⚠️ No supported Gemini models found in live list. Using raw ID: ${requestedId}`);
+        return requestedId;
+    }
+
+    // Normalize IDs (remove 'models/' prefix for internal matching)
+    const getCleanId = (name: string) => name.replace('models/', '');
+
+    // 1. PRO TIER Logic
+    if (isPro) {
+        // If user specifically requested a Pro model, use it if it exists and is supported
+        const exactMatch = supported.find(m => getCleanId(m.name) === requestedId);
+        if (exactMatch) return requestedId;
+
+        // Otherwise, proactively pick the best available Pro model
+        const latestPro = supported.find(m => m.name.includes('1.5-pro')) ||
+                        supported.find(m => m.name.includes('pro'));
+
+        if (latestPro) return getCleanId(latestPro.name);
+    }
+
+    // 2. FREE TIER / DEFAULT Logic
+    // Proactively pick the absolute latest Flash model
+    const latestFlash = supported.find(m => m.name.includes('1.5-flash-latest')) ||
+                        supported.find(m => m.name.includes('1.5-flash')) ||
+                        supported.find(m => m.name.includes('flash'));
+
+    if (latestFlash) {
+        const resolved = getCleanId(latestFlash.name);
+        if (resolved !== requestedId) {
+            logger.info(`🔄 Dynamic Route: Mapping ${requestedId} -> ${resolved} (Proactive Sync)`);
+        }
+        return resolved;
+    }
+
+    // 3. Last Resort: Pick the first supported model in the list
+    return getCleanId(supported[0].name);
+};
+
+export const getAvailableModels = async (isPro: boolean) => {
     const openRouterKey = process.env.OPENROUTER_API_KEY;
+    const geminiModels = await getLiveGeminiModels();
 
     let models: { id: string, name: string, provider: string, isProOnly: boolean, price: string }[] = [];
 
-    // 1. FREE TIER: Strictly Gemini Models (Direct Google API)
-    if (geminiKey) {
-        try {
-            const response = await axios.get(`${GOOGLE_AI_BASE_URL}/models?key=${geminiKey}`);
-            if (response.data && response.data.models) {
-                const geminiModels = response.data.models
-                    .filter((m: any) => m.supportedGenerationMethods.includes('generateContent'))
-                    .map((m: any) => {
-                        const fullName = m.name; // e.g. "models/gemini-1.5-flash"
-                        const id = fullName.replace('models/', '');
-                        // Strictly limit Free tier to Flash/low-cost models
-                        const isProModel = id.includes('pro') || id.includes('ultra');
-                        return {
-                            id: id,
-                            name: m.displayName,
-                            provider: 'google',
-                            isProOnly: isProModel,
-                            price: isProModel ? 'PRO' : 'Free'
-                        };
-                    });
-                models = [...models, ...geminiModels];
-            }
-        } catch (error) {
-            console.error('Error fetching Gemini models:', error);
-        }
+    // 1. DYNAMIC GOOGLE MODELS
+    if (geminiModels.length > 0) {
+        models = geminiModels
+            .filter((m: any) => m.supportedGenerationMethods.includes('generateContent'))
+            .map((m: any) => {
+                const fullName = m.name;
+                const id = fullName.replace('models/', '');
+                const isProModel = id.includes('pro') || id.includes('ultra');
+                return {
+                    id: id,
+                    name: m.displayName,
+                    provider: 'google',
+                    isProOnly: isProModel,
+                    price: isProModel ? 'PRO' : 'Free'
+                };
+            });
     }
 
     // 2. PREMIUM TIER: Strictly OpenRouter Models
@@ -77,11 +148,9 @@ export const getAvailableModels = async (isPro: boolean) => {
                         price: 'PRO'
                     }));
 
-                // Only return full list if user is Pro
                 if (isPro) {
                     models = [...models, ...premiumModels];
                 } else {
-                    // Return only top 3 as "Teasers"
                     models = [...models, ...premiumModels.slice(0, 3)];
                 }
             }
@@ -93,8 +162,7 @@ export const getAvailableModels = async (isPro: boolean) => {
     // Fallback if nothing found
     if (models.length === 0) {
         models = [
-            { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', provider: 'google', isProOnly: false, price: 'Free' },
-            { id: 'openai/gpt-4-turbo', name: 'GPT-4 Turbo (PRO)', provider: 'openrouter', isProOnly: true, price: 'PRO' }
+            { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', provider: 'google', isProOnly: false, price: 'Free' }
         ];
     }
 
@@ -105,77 +173,53 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
     const geminiKey = process.env.GEMINI_API_KEY || process.env.GEMINI_API;
     const openRouterKey = process.env.OPENROUTER_API_KEY;
 
-    // Normalize Provider Name (Frontend might send "gemini" or "gemini-1.5-flash")
     let activeProvider = provider;
-    if (activeProvider === 'gemini') activeProvider = 'gemini-1.5-flash';
-
-    // 1. Check if it's a Gemini model (Google Direct)
     const isGoogleModel = !activeProvider.includes('/');
 
-    // Circuit Breaker: If OpenRouter is failing, force Gemini Flash fallback
     if (!isGoogleModel && isOpenRouterBreakerTripped()) {
-        logger.warn(`⚠️ OpenRouter breaker TRIPPED. Falling back to Gemini Flash for stability.`);
-        activeProvider = 'gemini-1.5-flash';
+        logger.warn(`⚠️ OpenRouter breaker TRIPPED. Falling back to Gemini.`);
+        activeProvider = 'gemini'; // This will be resolved to the best Flash model below
     }
 
-    // Use Direct Gemini if it's a Google model and we have a key
     if (isGoogleModel && geminiKey) {
-        logger.info(`🤖 Using Direct Google Gemini API: ${activeProvider}`);
         try {
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
-            // Map history to Gemini's format (user/model roles)
+            // 🧠 PROACTIVE DYNAMIC RESOLUTION:
+            // Instead of trying a model that might be dead, we resolve the "Best Fit"
+            // from the live list before making the call.
+            const targetModel = await resolveBestGeminiModel(activeProvider, user?.isPro);
+
+            logger.info(`🤖 Calling Google Gemini API: ${targetModel}`);
+
             const contents = history.map((m: any) => ({
                 role: m.role === 'assistant' ? 'model' : 'user',
                 parts: [{ text: m.content }]
             }));
 
-            // Add current prompt, images, and audio if present
             const currentParts: any[] = [{ text: prompt }];
-
             if (imageDatas && imageDatas.length > 0) {
                 imageDatas.forEach(data => {
-                    currentParts.push({
-                        inline_data: {
-                            mime_type: "image/jpeg",
-                            data: data
-                        }
-                    });
+                    currentParts.push({ inline_data: { mime_type: "image/jpeg", data: data } });
                 });
             }
-
             if (audioData) {
-                currentParts.push({
-                    inline_data: {
-                        mime_type: "audio/mp3",
-                        data: audioData
-                    }
-                });
+                currentParts.push({ inline_data: { mime_type: "audio/mp3", data: audioData } });
             }
 
-            contents.push({
-                role: 'user',
-                parts: currentParts
-            });
+            contents.push({ role: 'user', parts: currentParts });
 
-            // 🚀 FIX: Precise URL Construction to avoid 404
-            const modelName = activeProvider.startsWith('models/') ? activeProvider : `models/${activeProvider}`;
-            const url = `${GOOGLE_AI_BASE_URL}/${modelName}:generateContent?key=${geminiKey}`;
+            // 🚀 SECURE URL CONSTRUCTION
+            const url = `${GOOGLE_AI_BASE_URL}/models/${targetModel}:generateContent?key=${geminiKey}`;
 
-            logger.info(`📡 Calling Gemini URL: ${url.split('?')[0]} (Key Hidden)`);
-
-            const response = await axios.post(
-                url,
-                { contents },
-                { signal: controller.signal }
-            );
+            const response = await axios.post(url, { contents }, { signal: controller.signal });
             clearTimeout(timeout);
 
             if (response.data?.candidates?.[0]?.content?.parts?.[0]?.text) {
                 return {
                     content: response.data.candidates[0].content.parts[0].text,
-                    provider: activeProvider,
+                    provider: targetModel,
                     success: true
                 };
             }
@@ -184,86 +228,54 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
             const isTimeout = error.name === 'AbortError' || error.code === 'ECONNABORTED';
             const statusCode = error.response?.status;
             const errorMsg = error.response?.data?.error?.message || error.message;
-
-            logger.error(`❌ Direct Gemini Error (${activeProvider}) [Status: ${statusCode}]:`, errorMsg);
+            logger.error(`❌ Gemini Failure [Status: ${statusCode}]:`, errorMsg);
 
             return {
                 content: '',
                 provider: activeProvider,
                 success: false,
-                error: isTimeout ? 'AI Provider Timeout (15s exceeded)' : `Gemini Error ${statusCode || ''}: ${errorMsg}`
+                error: isTimeout ? 'AI Provider Timeout' : `AI Error ${statusCode || ''}: ${errorMsg}`
             };
         }
     }
 
-    // 2. Otherwise use OpenRouter
-    if (!openRouterKey) {
-        return { success: false, error: "AI Key missing. Please set GEMINI_API_KEY or OPENROUTER_API_KEY in environment variables." };
-    }
+    // 2. OpenRouter Logic...
+    if (!openRouterKey) return { success: false, error: "AI Key missing." };
 
     logger.info(`🤖 Using OpenRouter for: ${activeProvider}`);
     try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
         const userMessageContent: any[] = [{ type: 'text', text: prompt }];
 
         if (imageDatas && imageDatas.length > 0) {
             imageDatas.forEach(data => {
-                userMessageContent.push({
-                    type: 'image_url',
-                    image_url: { url: `data:image/jpeg;base64,${data}` }
-                });
+                userMessageContent.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${data}` } });
             });
         }
+        if (audioData && !prompt) userMessageContent.push({ type: 'text', text: "[Attached Audio Message]" });
 
-        if (audioData && !prompt) {
-            userMessageContent.push({ type: 'text', text: "[Attached Audio Message]" });
-        }
-
-        const response = await axios.post(
-            OPENROUTER_API_URL,
-            {
-                model: activeProvider,
-                messages: [
-                    ...history.map((m: any) => ({ role: m.role, content: m.content })),
-                    { role: 'user', content: userMessageContent.length === 1 ? prompt : userMessageContent }
-                ]
-            },
-            {
-                headers: {
-                    'Authorization': `Bearer ${openRouterKey}`,
-                    'HTTP-Referer': 'https://mistreal-assistant.com',
-                    'X-Title': 'Mistreal Assistant'
-                },
-                signal: controller.signal
-            }
-        );
+        const response = await axios.post(OPENROUTER_API_URL, {
+            model: activeProvider,
+            messages: [
+                ...history.map((m: any) => ({ role: m.role, content: m.content })),
+                { role: 'user', content: userMessageContent.length === 1 ? prompt : userMessageContent }
+            ]
+        }, {
+            headers: { 'Authorization': `Bearer ${openRouterKey}`, 'HTTP-Referer': 'https://mistreal-assistant.com', 'X-Title': 'Mistreal Assistant' },
+            signal: controller.signal
+        });
         clearTimeout(timeout);
-        openRouterFailures = 0; // Reset on success
+        openRouterFailures = 0;
 
-        if (!response.data || !response.data.choices || response.data.choices.length === 0) {
-            throw new Error('OpenRouter returned an empty response');
-        }
+        if (!response.data || !response.data.choices || response.data.choices.length === 0) throw new Error('Empty OpenRouter response');
 
-        return {
-            content: response.data.choices[0].message.content,
-            provider: activeProvider,
-            success: true
-        };
+        return { content: response.data.choices[0].message.content, provider: activeProvider, success: true };
     } catch (error: any) {
         const isTimeout = error.name === 'AbortError' || error.code === 'ECONNABORTED';
         const errorMessage = error.response?.data?.error?.message || error.message;
-
         openRouterFailures++;
         lastOpenRouterFailure = Date.now();
-        logger.error(`❌ OpenRouter Error (Failures: ${openRouterFailures}):`, errorMessage);
-
-        return {
-            content: '',
-            provider: activeProvider,
-            success: false,
-            error: isTimeout ? 'AI Provider Timeout (15s exceeded)' : `OpenRouter Error: ${errorMessage}`
-        };
+        return { content: '', provider: activeProvider, success: false, error: isTimeout ? 'AI Provider Timeout' : `OpenRouter Error: ${errorMessage}` };
     }
 };
