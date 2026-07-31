@@ -2,7 +2,7 @@ import axios from 'axios';
 import logger from '../utils/logger';
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const GOOGLE_AI_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+const GOOGLE_AI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 
 const FAILURE_THRESHOLD = 3;
 
@@ -38,20 +38,21 @@ export const getAvailableModels = async (isPro: boolean) => {
     // 1. FREE TIER: Strictly Gemini Models (Direct Google API)
     if (geminiKey) {
         try {
-            const response = await axios.get(`${GOOGLE_AI_URL}?key=${geminiKey}`);
+            const response = await axios.get(`${GOOGLE_AI_BASE_URL}/models?key=${geminiKey}`);
             if (response.data && response.data.models) {
                 const geminiModels = response.data.models
                     .filter((m: any) => m.supportedGenerationMethods.includes('generateContent'))
                     .map((m: any) => {
-                        const id = m.name.replace('models/', '');
+                        const fullName = m.name; // e.g. "models/gemini-1.5-flash"
+                        const id = fullName.replace('models/', '');
                         // Strictly limit Free tier to Flash/low-cost models
-                        const isPro = id.includes('pro') || id.includes('ultra');
+                        const isProModel = id.includes('pro') || id.includes('ultra');
                         return {
                             id: id,
                             name: m.displayName,
                             provider: 'google',
-                            isProOnly: isPro,
-                            price: isPro ? 'PRO' : 'Free'
+                            isProOnly: isProModel,
+                            price: isProModel ? 'PRO' : 'Free'
                         };
                     });
                 models = [...models, ...geminiModels];
@@ -104,9 +105,12 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
     const geminiKey = process.env.GEMINI_API_KEY || process.env.GEMINI_API;
     const openRouterKey = process.env.OPENROUTER_API_KEY;
 
-    // 1. Check if it's a Gemini model (Google Direct)
-    const isGoogleModel = !provider.includes('/');
+    // Normalize Provider Name (Frontend might send "gemini" or "gemini-1.5-flash")
     let activeProvider = provider;
+    if (activeProvider === 'gemini') activeProvider = 'gemini-1.5-flash';
+
+    // 1. Check if it's a Gemini model (Google Direct)
+    const isGoogleModel = !activeProvider.includes('/');
 
     // Circuit Breaker: If OpenRouter is failing, force Gemini Flash fallback
     if (!isGoogleModel && isOpenRouterBreakerTripped()) {
@@ -114,7 +118,8 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
         activeProvider = 'gemini-1.5-flash';
     }
 
-    if (activeProvider.startsWith('gemini') && !activeProvider.includes('/') && geminiKey) {
+    // Use Direct Gemini if it's a Google model and we have a key
+    if (isGoogleModel && geminiKey) {
         logger.info(`🤖 Using Direct Google Gemini API: ${activeProvider}`);
         try {
             const controller = new AbortController();
@@ -154,9 +159,11 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
                 parts: currentParts
             });
 
-            // FIX: Ensure correct model name format for the endpoint
-            // Some models might have "gemini-1.5-flash-latest" etc.
-            const url = `${GOOGLE_AI_URL}/${activeProvider}:generateContent?key=${geminiKey}`;
+            // 🚀 FIX: Precise URL Construction to avoid 404
+            const modelName = activeProvider.startsWith('models/') ? activeProvider : `models/${activeProvider}`;
+            const url = `${GOOGLE_AI_BASE_URL}/${modelName}:generateContent?key=${geminiKey}`;
+
+            logger.info(`📡 Calling Gemini URL: ${url.split('?')[0]} (Key Hidden)`);
 
             const response = await axios.post(
                 url,
@@ -176,23 +183,25 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
         } catch (error: any) {
             const isTimeout = error.name === 'AbortError' || error.code === 'ECONNABORTED';
             const statusCode = error.response?.status;
-            logger.error(`❌ Direct Gemini Error (${activeProvider}) [Status: ${statusCode}]:`, error.message);
+            const errorMsg = error.response?.data?.error?.message || error.message;
+
+            logger.error(`❌ Direct Gemini Error (${activeProvider}) [Status: ${statusCode}]:`, errorMsg);
 
             return {
                 content: '',
                 provider: activeProvider,
                 success: false,
-                error: isTimeout ? 'AI Provider Timeout (15s exceeded)' : `Gemini Error ${statusCode || ''}: ${error.message}`
+                error: isTimeout ? 'AI Provider Timeout (15s exceeded)' : `Gemini Error ${statusCode || ''}: ${errorMsg}`
             };
         }
     }
 
     // 2. Otherwise use OpenRouter
     if (!openRouterKey) {
-        return { success: false, error: "OpenRouter API key missing" };
+        return { success: false, error: "AI Key missing. Please set GEMINI_API_KEY or OPENROUTER_API_KEY in environment variables." };
     }
 
-    logger.info(`🤖 Using OpenRouter for: ${provider}`);
+    logger.info(`🤖 Using OpenRouter for: ${activeProvider}`);
     try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -215,7 +224,7 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
         const response = await axios.post(
             OPENROUTER_API_URL,
             {
-                model: provider,
+                model: activeProvider,
                 messages: [
                     ...history.map((m: any) => ({ role: m.role, content: m.content })),
                     { role: 'user', content: userMessageContent.length === 1 ? prompt : userMessageContent }
@@ -239,7 +248,7 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
 
         return {
             content: response.data.choices[0].message.content,
-            provider: provider,
+            provider: activeProvider,
             success: true
         };
     } catch (error: any) {
@@ -252,7 +261,7 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
 
         return {
             content: '',
-            provider: provider,
+            provider: activeProvider,
             success: false,
             error: isTimeout ? 'AI Provider Timeout (15s exceeded)' : `OpenRouter Error: ${errorMessage}`
         };

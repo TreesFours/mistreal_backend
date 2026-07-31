@@ -25,6 +25,26 @@ const port = process.env.PORT || 3000;
 const DATABASE_URL = process.env.DATABASE_URL;
 const upload = multer({ storage: multer.memoryStorage() });
 
+// 🛡️ Helper: Get or Create User
+const getOrCreateUser = async (deviceId: string) => {
+    if (!DATABASE_URL) return null;
+    try {
+        const [user, created] = await User.findOrCreate({
+            where: { deviceId },
+            defaults: {
+                deviceId,
+                isPro: false,
+                subscriptionTier: 'free'
+            }
+        });
+        if (created) console.log(`🆕 New user registered: ${deviceId}`);
+        return user;
+    } catch (e) {
+        console.error(`❌ Error finding/creating user ${deviceId}:`, e);
+        return null;
+    }
+};
+
 // 🗄️ Database Connection
 const initDb = async () => {
     if (DATABASE_URL) {
@@ -47,7 +67,7 @@ const initDb = async () => {
     }
 };
 
-// 🛡️ Middleware (Must be top-level)
+// 🛡️ Middleware
 app.use(helmet());
 app.use(cors());
 app.use(morgan('dev'));
@@ -65,12 +85,14 @@ app.post('/api/chat', upload.fields([{ name: 'images', maxCount: 5 }, { name: 'a
     let { prompt, provider, history, deviceId, contextMetadata } = req.body;
     const files = req.files as { images?: Express.Multer.File[], audio?: Express.Multer.File[] };
 
+    if (!deviceId) return res.status(400).json({ success: false, error: 'deviceId is required' });
+
     if (typeof history === 'string') {
         try { history = JSON.parse(history); } catch (e) { history = []; }
     }
-    if (typeof contextMetadata === 'string') {
-        try { contextMetadata = JSON.parse(contextMetadata); } catch (e) {}
-    }
+
+    // Auto-create user on first interaction
+    const user = await getOrCreateUser(deviceId);
 
     if (!prompt && !files?.audio) {
         return res.status(400).json({ success: false, error: 'Prompt or audio is required' });
@@ -78,8 +100,6 @@ app.post('/api/chat', upload.fields([{ name: 'images', maxCount: 5 }, { name: 'a
 
     const imageDatas = files?.images?.map(extractImageData) || [];
     const audioData = files?.audio?.[0] ? extractAudioData(files.audio[0]) : undefined;
-
-    const user = DATABASE_URL ? await User.findOne({ where: { deviceId } }) : null;
 
     let enhancedPrompt = prompt;
     if (contextMetadata) {
@@ -94,12 +114,10 @@ app.post('/api/chat', upload.fields([{ name: 'images', maxCount: 5 }, { name: 'a
 app.get('/api/models', async (req, res) => {
     const { deviceId } = req.query;
     let isPro = false;
-    try {
-        if (deviceId && DATABASE_URL) {
-            const user = await User.findOne({ where: { deviceId: String(deviceId) } });
-            isPro = user?.isPro ?? false;
-        }
-    } catch (e) { console.error("Error fetching user for models:", e); }
+    if (deviceId) {
+        const user = await getOrCreateUser(String(deviceId));
+        isPro = user?.isPro ?? false;
+    }
     const models = await getAvailableModels(isPro);
     res.json(models);
 });
@@ -109,8 +127,9 @@ app.get('/api/social/sync-all', async (req, res) => {
     const { deviceId } = req.query;
     if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
     try {
-        const user = DATABASE_URL ? await User.findOne({ where: { deviceId: deviceId as string } }) : null;
-        if (!user) return res.status(404).json({ error: 'User not found' });
+        const user = await getOrCreateUser(deviceId as string);
+        if (!user) return res.status(404).json({ error: 'User system unavailable' });
+
         const tokens = await SocialToken.findAll({ where: { deviceId: deviceId as string } });
         const userData: any = { deviceId: user.deviceId, zernioUserToken: user.zernioUserToken, isPro: user.isPro };
         tokens.forEach(t => { userData[`${t.platform}Token`] = t.accessToken; });
@@ -124,14 +143,10 @@ app.get('/api/social/sync-all', async (req, res) => {
 
 app.get('/api/social/sync', async (req, res) => {
     const { deviceId } = req.query;
-    let userToken = null;
-    let isPro = false;
-    if (deviceId && DATABASE_URL) {
-        const user = await User.findOne({ where: { deviceId: deviceId as string } });
-        userToken = user?.zernioUserToken;
-        isPro = user?.isPro || false;
-    }
-    const summary = await getSocialSummary(userToken || null, isPro);
+    if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
+
+    const user = await getOrCreateUser(deviceId as string);
+    const summary = await getSocialSummary(user?.zernioUserToken || null, user?.isPro || false);
     res.json(summary);
 });
 
@@ -146,8 +161,10 @@ app.post('/api/social/connect', async (req, res) => {
 app.post('/api/social/action', async (req, res) => {
     const { deviceId, action, delayMinutes } = req.body;
     if (!DATABASE_URL) return res.status(503).json({ error: 'Database not available' });
-    const user = await User.findOne({ where: { deviceId } });
+
+    const user = await getOrCreateUser(deviceId);
     if (!user || !user.zernioUserToken) return res.status(401).json({ error: 'Social account not connected' });
+
     try {
         if (delayMinutes && delayMinutes > 0) {
             const executeAt = new Date(Date.now() + delayMinutes * 60000);
@@ -164,6 +181,7 @@ app.post('/api/subscribe', async (req: any, res: any) => {
     const { tier, deviceId } = req.body;
     try {
         if (!deviceId) return res.status(400).json({ success: false, error: 'deviceId is required' });
+        await getOrCreateUser(deviceId); // Ensure user exists before subscription
         const checkoutUrl = await createSubscriptionSession(tier, deviceId);
         res.json({ success: true, url: checkoutUrl });
     } catch (error: any) { res.status(500).json({ success: false, error: error.message }); }
