@@ -73,11 +73,22 @@ app.use(cors());
 app.use(morgan('dev'));
 app.use(express.json());
 
-// 🔗 Routes
-app.use('/api/social', socialRoutes);
-app.use('/api/webhook', webhookRoutes);
+    // 🔗 Routes
+    app.use('/api/social', socialRoutes);
+    app.use('/api/webhook', webhookRoutes);
 
-app.get('/', (req, res) => res.send('🚀 Mistreal Backend Running'));
+    app.get('/api/social/platforms', async (req, res) => {
+        const { deviceId } = req.query;
+        let isPro = false;
+        if (deviceId) {
+            const user = await getOrCreateUser(String(deviceId));
+            isPro = user?.isPro ?? false;
+        }
+        const platforms = await getAvailablePlatforms(isPro);
+        res.json(platforms);
+    });
+
+    app.get('/', (req, res) => res.send('🚀 Mistreal Backend Running'));
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date() }));
 
 // 🧠 AI Chat
@@ -175,6 +186,28 @@ app.post('/api/social/action', async (req, res) => {
             res.json({ success: true, result });
         }
     } catch (error: any) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.post('/api/user/settings', async (req: any, res: any) => {
+    const { deviceId, userName, aiPersona, autoReplyDelay, guardianEnabled, emergencyContacts } = req.body;
+    if (!deviceId) return res.status(400).json({ success: false, error: 'deviceId is required' });
+
+    try {
+        const user = await getOrCreateUser(deviceId);
+        if (!user) return res.status(404).json({ success: false, error: 'User system unavailable' });
+
+        if (userName !== undefined) user.userName = userName;
+        if (aiPersona !== undefined) user.aiPersona = aiPersona;
+        if (autoReplyDelay !== undefined) user.autoReplyDelay = autoReplyDelay;
+        if (guardianEnabled !== undefined) user.guardianEnabled = guardianEnabled;
+        if (emergencyContacts !== undefined) user.emergencyContacts = emergencyContacts;
+
+        await user.save();
+        res.json({ success: true, message: 'Settings secured successfully' });
+    } catch (error: any) {
+        console.error(`❌ Error updating settings for ${deviceId}:`, error);
+        res.status(500).json({ success: false, error: error.message });
+    }
 });
 
 app.post('/api/subscribe', async (req: any, res: any) => {
