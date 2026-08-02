@@ -1,12 +1,9 @@
 import axios from 'axios';
 
-const ZERNIO_API_URL = 'https://api.zernio.io/v1'; // Research confirms .io is the production URL
+const ZERNIO_API_URL = 'https://api.zernio.com/v1'; // FIXED: Domain corrected to .com
 
 /**
  * Professional Platform Registry (Backend-Only)
- * This allows the backend to enrich dynamic platform data before sending to frontend.
- * If Zernio adds a platform NOT in this list, the frontend will still render it
- * using capitalization and a default icon, maintaining 100% dynamic behavior.
  */
 const PLATFORM_REGISTRY: Record<string, { name: string, icon: string, color: string }> = {
     'twitter': { name: 'X (Twitter)', icon: '🐦', color: '#1DA1F2' },
@@ -21,12 +18,11 @@ const PLATFORM_REGISTRY: Record<string, { name: string, icon: string, color: str
 };
 
 export const getAvailablePlatforms = async (isPro: boolean) => {
-    // In a truly dynamic system, we'd fetch these from Zernio
     const allPlatforms = Object.entries(PLATFORM_REGISTRY).map(([id, meta]) => ({
         id,
         name: meta.name,
         icon: meta.icon,
-        isProOnly: !['twitter', 'whatsapp_business', 'x'].includes(id)
+        isProOnly: !['twitter', 'whatsapp_business', 'x', 'whatsapp'].includes(id)
     }));
 
     if (isPro) return allPlatforms;
@@ -50,8 +46,6 @@ export const getSocialSummary = async (userToken: string | null, isPro: boolean 
 
         let items = response.data.items || [];
 
-        // 🛡️ TIER-BASED FILTERING: Zernio unifies ALL messages in one inbox.
-        // If user is Free, we filter the inbox to only show the two allowed platforms.
         if (!isPro) {
             const allowedFreePlatforms = ['twitter', 'x', 'whatsapp', 'whatsapp_business'];
             items = items.filter((item: any) =>
@@ -73,7 +67,6 @@ export const getSocialSummary = async (userToken: string | null, isPro: boolean 
             platformCounts[item.platform] = (platformCounts[item.platform] || 0) + 1;
         });
 
-        // 🧠 Dynamic Enrichment Logic
         const platformUpdates = Object.keys(platformCounts).map(platformId => {
             const meta = PLATFORM_REGISTRY[platformId.toLowerCase()] || {
                 name: platformId.charAt(0).toUpperCase() + platformId.slice(1),
@@ -91,7 +84,6 @@ export const getSocialSummary = async (userToken: string | null, isPro: boolean 
             };
         });
 
-        // Map full posts with metadata
         const posts = items.map((item: any) => {
             const meta = PLATFORM_REGISTRY[item.platform.toLowerCase()] || {
                 name: item.platform,
