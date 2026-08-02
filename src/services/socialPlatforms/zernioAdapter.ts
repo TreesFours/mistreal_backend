@@ -2,6 +2,8 @@ import axios from 'axios';
 
 const ZERNIO_API_URL = process.env.ZERNIO_API_URL || 'https://api.zernio.com';
 const ZERNIO_API_KEY = process.env.ZERNIO_API_KEY || '';
+const ZERNIO_CLIENT_ID = process.env.ZERNIO_CLIENT_ID || '';
+const ZERNIO_CLIENT_SECRET = process.env.ZERNIO_CLIENT_SECRET || '';
 
 /**
  * Generic Zernio adapter.
@@ -11,8 +13,8 @@ const ZERNIO_API_KEY = process.env.ZERNIO_API_KEY || '';
 export const ZernioAdapter = {
   getAuthUrl: (deviceId: string, callbackUrl: string, platform: string) => {
     const state = Buffer.from(JSON.stringify({ deviceId, platform })).toString('base64');
-    // Construct a generic authorize URL — adjust if Zernio has a different path
-    return `${ZERNIO_API_URL}/oauth/authorize?platform=${encodeURIComponent(platform)}&redirect_uri=${encodeURIComponent(callbackUrl)}&state=${state}`;
+    // FIXED: Added client_id which is required by Zernio OAuth
+    return `${ZERNIO_API_URL}/oauth/authorize?client_id=${ZERNIO_CLIENT_ID}&platform=${encodeURIComponent(platform)}&redirect_uri=${encodeURIComponent(callbackUrl)}&state=${state}`;
   },
 
   exchangeCodeForToken: async (code: string, callbackUrl: string, platform: string) => {
@@ -20,8 +22,11 @@ export const ZernioAdapter = {
       const resp = await axios.post(
         `${ZERNIO_API_URL}/oauth/token`,
         {
+          grant_type: 'authorization_code',
           code,
           redirect_uri: callbackUrl,
+          client_id: ZERNIO_CLIENT_ID,
+          client_secret: ZERNIO_CLIENT_SECRET,
           platform
         },
         {
