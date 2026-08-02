@@ -29,6 +29,8 @@ export class User extends Model {
     public whatsappAccessToken!: string | null;
     public facebookAccessToken!: string | null;
     public linkedinAccessToken!: string | null;
+    public discordAccessToken!: string | null;
+    public telegramAccessToken!: string | null;
 }
 
 User.init({
@@ -57,7 +59,9 @@ User.init({
     instagramAccessToken: { type: DataTypes.TEXT, allowNull: true },
     whatsappAccessToken: { type: DataTypes.TEXT, allowNull: true },
     facebookAccessToken: { type: DataTypes.TEXT, allowNull: true },
-    linkedinAccessToken: { type: DataTypes.TEXT, allowNull: true }
+    linkedinAccessToken: { type: DataTypes.TEXT, allowNull: true },
+    discordAccessToken: { type: DataTypes.TEXT, allowNull: true },
+    telegramAccessToken: { type: DataTypes.TEXT, allowNull: true }
 }, {
     sequelize,
     modelName: 'User',

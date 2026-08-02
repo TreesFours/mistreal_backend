@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { UnifiedSocialService } from '../services/socialPlatforms/unified';
 import { createConnectSession, getAvailablePlatforms, exchangeOAuthCode } from '../services/socialService';
+import { getPlatformDefinition } from '../services/socialPlatforms/platformRegistry';
 import { User } from '../models/userModel';
 
 const router = Router();
@@ -80,25 +81,26 @@ router.get('/callback', async (req: Request, res: Response) => {
         throw new Error('Failed to find or create user');
       }
 
-      // Store token in appropriate field based on platform
-      const platformLower = decodedPlatform.toLowerCase();
-      if (platformLower === 'twitter' || platformLower === 'x') {
-        user.twitterAccessToken = tokenData.accessToken;
-        user.twitterRefreshToken = tokenData.refreshToken || null;
-      } else if (platformLower === 'instagram') {
-        user.instagramAccessToken = tokenData.accessToken;
-      } else if (platformLower === 'whatsapp' || platformLower === 'whatsapp_business') {
-        user.whatsappAccessToken = tokenData.accessToken;
-      } else if (platformLower === 'facebook') {
-        user.facebookAccessToken = tokenData.accessToken;
-      } else if (platformLower === 'linkedin') {
-        user.linkedinAccessToken = tokenData.accessToken;
+      // Store platform token generically using registry metadata
+      const platformDefinition = getPlatformDefinition(decodedPlatform);
+      if (!platformDefinition) {
+        throw new Error(`Unsupported platform: ${decodedPlatform}`);
       }
 
-      // Add to connected platforms
+      const tokenField = platformDefinition.tokenField;
+      if (tokenField) {
+        (user as any)[tokenField] = tokenData.accessToken;
+      }
+
+      if (platformDefinition.refreshTokenField) {
+        (user as any)[platformDefinition.refreshTokenField] = tokenData.refreshToken || null;
+      }
+
+      // Add canonical platform ID into connectedPlatforms
       const connectedPlatforms = user.connectedPlatforms || [];
-      if (!connectedPlatforms.includes(decodedPlatform)) {
-        connectedPlatforms.push(decodedPlatform);
+      const canonicalPlatform = platformDefinition.id;
+      if (!connectedPlatforms.includes(canonicalPlatform)) {
+        connectedPlatforms.push(canonicalPlatform);
         user.connectedPlatforms = connectedPlatforms;
       }
 
