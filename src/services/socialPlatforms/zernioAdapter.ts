@@ -72,5 +72,20 @@ export const ZernioAdapter = {
       console.error(`Zernio fetchContent failed for ${platform}:`, error.response?.data || error.message);
       return [];
     }
+  },
+
+  sendAction: async (accessToken: string, platform: string, action: { type: string, content: string, targetId?: string }) => {
+    try {
+      const resp = await axios.post(`${ZERNIO_API_URL}/v1/platforms/${encodeURIComponent(platform)}/actions`, action, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'X-Api-Key': ZERNIO_API_KEY
+        }
+      });
+      return resp.data;
+    } catch (error: any) {
+      console.error(`Zernio action failed for ${platform}:`, error.response?.data || error.message);
+      throw new Error(`Social action failed: ${error.response?.data?.error || error.message}`);
+    }
   }
 };

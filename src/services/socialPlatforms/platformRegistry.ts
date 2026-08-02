@@ -17,6 +17,7 @@ export interface SocialPlatformDefinition {
   getAuthUrl: (deviceId: string, callbackUrl: string) => string;
   exchangeCodeForToken: (code: string, callbackUrl: string) => Promise<any>;
   fetchContent: (user: User) => Promise<any[]>;
+  postContent?: (user: User, content: string, type: string) => Promise<any>;
 }
 
 /**
@@ -49,6 +50,10 @@ const PLATFORM_DEFINITIONS: Record<string, SocialPlatformDefinition> = {
       return process.env.TWITTER_CLIENT_ID
         ? TwitterOAuth.fetchUserPosts(user.twitterAccessToken)
         : ZernioAdapter.fetchContent(user.twitterAccessToken, 'twitter');
+    },
+    postContent: async (user: User, content: string) => {
+      if (!user.twitterAccessToken) throw new Error('Twitter not connected');
+      return ZernioAdapter.sendAction(user.twitterAccessToken, 'twitter', { type: 'post', content });
     }
   },
   whatsapp: {
@@ -74,6 +79,11 @@ const PLATFORM_DEFINITIONS: Record<string, SocialPlatformDefinition> = {
       return process.env.WHATSAPP_CLIENT_ID
         ? WhatsAppOAuth.fetchMessages(user.whatsappAccessToken, process.env.WHATSAPP_BUSINESS_PHONE_ID || '')
         : ZernioAdapter.fetchContent(user.whatsappAccessToken, 'whatsapp');
+    },
+    postContent: async (user: User, content: string, type: string) => {
+      if (!user.whatsappAccessToken) throw new Error('WhatsApp not connected');
+      // type can be 'status' or 'message'
+      return ZernioAdapter.sendAction(user.whatsappAccessToken, 'whatsapp', { type: type === 'status' ? 'status_update' : 'message', content });
     }
   },
   instagram: {

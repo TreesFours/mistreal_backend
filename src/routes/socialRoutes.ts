@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { UnifiedSocialService } from '../services/socialPlatforms/unified';
-import { createConnectSession, getAvailablePlatforms, exchangeOAuthCode } from '../services/socialService';
+import { createConnectSession, getAvailablePlatforms, exchangeOAuthCode, sendSocialAction } from '../services/socialService';
 import { getPlatformDefinition } from '../services/socialPlatforms/platformRegistry';
 import { User } from '../models/userModel';
 
@@ -121,6 +121,20 @@ router.get('/callback', async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Callback handler error:', error.message);
     res.redirect(`mistreal://social-connected?success=false&error=${error.message}`);
+  }
+});
+
+router.post('/action', async (req: Request, res: Response) => {
+  try {
+    const { deviceId, platform, type, content, targetId } = req.body;
+    if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
+    const user = await User.findOne({ where: { deviceId } });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const result = await sendSocialAction(user, { platform, type, content, targetId });
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
   }
 });
 

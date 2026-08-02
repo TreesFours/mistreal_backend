@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Request, Response } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
@@ -108,11 +108,12 @@ app.get('/api/models', async (req, res) => {
 });
 
 // 📱 Legacy Social Routes (kept for backward compatibility, ideally move to socialRoutes)
-app.get('/api/social/sync', async (req, res) => {
+app.get('/api/social/sync', async (req: Request, res: Response) => {
     const { deviceId } = req.query;
     if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
     const user = await getOrCreateUserInternal(deviceId as string);
-    const summary = await getSocialSummary(user?.zernioUserToken || null, user?.isPro || false);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const summary = await getSocialSummary(user, user.isPro || false);
     res.json(summary);
 });
 

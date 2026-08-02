@@ -108,12 +108,17 @@ export const exchangeOAuthCode = async (platform: string, code: string): Promise
     }
 };
 
-export const sendSocialAction = async (userToken: string, action: any) => {
+export const sendSocialAction = async (user: User, action: { platform: string, type: string, content: string, targetId?: string }) => {
     try {
-        // Implement based on specific platform actions
-        // For now, return a placeholder
-        return { success: true, message: 'Action queued' };
+        const definition = getPlatformDefinition(action.platform);
+        if (!definition || !definition.postContent) {
+            throw new Error(`Posting not supported for ${action.platform}`);
+        }
+
+        const result = await definition.postContent(user, action.content, action.type);
+        return { success: true, data: result };
     } catch (error: any) {
-        throw new Error('Failed to send social action');
+        console.error('Social action error:', error.message);
+        throw new Error(`Failed to execute social action: ${error.message}`);
     }
 };
