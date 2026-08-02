@@ -11,7 +11,7 @@ export class User extends Model {
     public zernioUserToken!: string | null;
     public socialDrafts!: any | null;
     public userName!: string | null;
-    public aiPersona!: string | null; // Added
+    public aiPersona!: string | null;
     public preferences!: any | null;
     public messageCount!: number;
     public lastResetDate!: Date;
@@ -21,6 +21,14 @@ export class User extends Model {
     public emergencyContacts!: any[];
     public connectedPlatforms!: string[];
     public unreadMessagesCount!: number;
+    
+    // Platform-specific OAuth tokens
+    public twitterAccessToken!: string | null;
+    public twitterRefreshToken!: string | null;
+    public instagramAccessToken!: string | null;
+    public whatsappAccessToken!: string | null;
+    public facebookAccessToken!: string | null;
+    public linkedinAccessToken!: string | null;
 }
 
 User.init({
@@ -32,7 +40,7 @@ User.init({
     zernioUserToken: { type: DataTypes.STRING, allowNull: true },
     socialDrafts: { type: DataTypes.JSONB, allowNull: true },
     userName: { type: DataTypes.STRING, allowNull: true },
-    aiPersona: { type: DataTypes.STRING, allowNull: true, defaultValue: 'Shadow' }, // Added
+    aiPersona: { type: DataTypes.STRING, allowNull: true, defaultValue: 'Shadow' },
     preferences: { type: DataTypes.JSONB, defaultValue: {} },
     messageCount: { type: DataTypes.INTEGER, defaultValue: 0 },
     lastResetDate: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
@@ -41,7 +49,15 @@ User.init({
     guardianEnabled: { type: DataTypes.BOOLEAN, defaultValue: false },
     emergencyContacts: { type: DataTypes.JSONB, defaultValue: [] },
     connectedPlatforms: { type: DataTypes.ARRAY(DataTypes.STRING), defaultValue: [] },
-    unreadMessagesCount: { type: DataTypes.INTEGER, defaultValue: 0 }
+    unreadMessagesCount: { type: DataTypes.INTEGER, defaultValue: 0 },
+    
+    // Platform-specific OAuth tokens
+    twitterAccessToken: { type: DataTypes.TEXT, allowNull: true },
+    twitterRefreshToken: { type: DataTypes.TEXT, allowNull: true },
+    instagramAccessToken: { type: DataTypes.TEXT, allowNull: true },
+    whatsappAccessToken: { type: DataTypes.TEXT, allowNull: true },
+    facebookAccessToken: { type: DataTypes.TEXT, allowNull: true },
+    linkedinAccessToken: { type: DataTypes.TEXT, allowNull: true }
 }, {
     sequelize,
     modelName: 'User',

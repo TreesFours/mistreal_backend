@@ -1,24 +1,24 @@
 // backend/src/services/socialPlatforms/unified.ts
-// Truly Dynamic Social Orchestrator - Data Driven
+// Truly Dynamic Social Orchestrator
 
 import { getSocialSummary } from '../socialService';
 
 export class UnifiedSocialService {
   /**
    * Professional Sync Orchestrator
-   * Relies on the Zernio Unified API to fetch all platforms dynamically.
+   * Fetches from all connected platforms for the user
    */
   static async syncAllPlatforms(user: any): Promise<any> {
-    if (user.zernioUserToken) {
-        return getSocialSummary(user.zernioUserToken, user.isPro);
+    if (!user.connectedPlatforms || user.connectedPlatforms.length === 0) {
+        return {
+            summary: "No connected platforms. Go to Settings to connect.",
+            platformUpdates: [],
+            posts: [],
+            platformStatus: {},
+            rawContent: ""
+        };
     }
 
-    return {
-        summary: "CONNECTION_REQUIRED",
-        platformUpdates: [],
-        posts: [],
-        platformStatus: {},
-        rawContent: ""
-    };
+    return await getSocialSummary(user, user.isPro);
   }
 }

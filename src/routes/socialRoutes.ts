@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { UnifiedSocialService } from '../services/socialPlatforms/unified';
-import { createConnectSession, getAvailablePlatforms } from '../services/socialService';
+import { createConnectSession, getAvailablePlatforms, exchangeOAuthCode } from '../services/socialService';
 import { User } from '../models/userModel';
 
 const router = Router();
@@ -28,14 +28,14 @@ router.get('/platforms', async (req: Request, res: Response) => {
     res.json(platforms);
 });
 
-// === PROFESSIONAL DYNAMIC OAUTH ROUTES ===
+// === PROFESSIONAL DIRECT OAUTH ROUTES ===
 router.get('/connect/:platform', async (req: Request, res: Response) => {
   const { platform } = req.params;
   const { deviceId } = req.query;
   if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
 
   try {
-    const authUrl = await createConnectSession(platform as string);
+    const authUrl = await createConnectSession(platform as string, deviceId as string);
     res.json({ authUrl, deviceId });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -44,25 +44,80 @@ router.get('/connect/:platform', async (req: Request, res: Response) => {
 
 router.get('/callback', async (req: Request, res: Response) => {
   try {
-    const { code, state, platform } = req.query;
-    const deviceId = state as string;
-    const userToken = code as string;
+    const { code, state, platform, error: oauthError } = req.query;
 
-    if (deviceId) {
-        const user = await User.findOne({ where: { deviceId } });
-        if (user) {
-            user.zernioUserToken = userToken;
-            const platforms = user.connectedPlatforms || [];
-            const platformName = platform as string;
-            if (platformName && !platforms.includes(platformName)) {
-                platforms.push(platformName);
-                user.connectedPlatforms = platforms;
-            }
-            await user.save();
-        }
+    // Decode state
+    let deviceId: string = '';
+    let decodedPlatform: string = '';
+    try {
+      const decoded = JSON.parse(Buffer.from(state as string, 'base64').toString());
+      deviceId = decoded.deviceId || '';
+      decodedPlatform = decoded.platform || (platform as string);
+    } catch (e) {
+      console.error('Failed to decode state:', e);
+      return res.redirect(`mistreal://social-connected?success=false&error=Invalid state`);
     }
-    res.redirect(`mistreal://social-connected?platform=${platform || 'unified'}&success=true&deviceId=${deviceId}`);
+
+    if (oauthError) {
+      return res.redirect(
+        `mistreal://social-connected?platform=${decodedPlatform}&success=false&error=${oauthError}&deviceId=${deviceId}`
+      );
+    }
+
+    if (!code || !deviceId) {
+      return res.redirect(
+        `mistreal://social-connected?platform=${decodedPlatform}&success=false&error=Missing code or deviceId&deviceId=${deviceId}`
+      );
+    }
+
+    try {
+      // Exchange code for token
+      const tokenData = await exchangeOAuthCode(decodedPlatform, code as string);
+
+      // Find or create user
+      const user = await getOrCreateUser(deviceId);
+      if (!user) {
+        throw new Error('Failed to find or create user');
+      }
+
+      // Store token in appropriate field based on platform
+      const platformLower = decodedPlatform.toLowerCase();
+      if (platformLower === 'twitter' || platformLower === 'x') {
+        user.twitterAccessToken = tokenData.accessToken;
+        user.twitterRefreshToken = tokenData.refreshToken || null;
+      } else if (platformLower === 'instagram') {
+        user.instagramAccessToken = tokenData.accessToken;
+      } else if (platformLower === 'whatsapp' || platformLower === 'whatsapp_business') {
+        user.whatsappAccessToken = tokenData.accessToken;
+      } else if (platformLower === 'facebook') {
+        user.facebookAccessToken = tokenData.accessToken;
+      } else if (platformLower === 'linkedin') {
+        user.linkedinAccessToken = tokenData.accessToken;
+      }
+
+      // Add to connected platforms
+      const connectedPlatforms = user.connectedPlatforms || [];
+      if (!connectedPlatforms.includes(decodedPlatform)) {
+        connectedPlatforms.push(decodedPlatform);
+        user.connectedPlatforms = connectedPlatforms;
+      }
+
+      await user.save();
+
+      // Redirect back to app with success
+      res.redirect(
+        `mistreal://social-connected?platform=${decodedPlatform}&success=true&deviceId=${deviceId}`
+      );
+    } catch (tokenError: any) {
+      console.error('Token exchange error:', tokenError.message);
+      res.redirect(
+        `mistreal://social-connected?platform=${decodedPlatform}&success=false&error=${encodeURIComponent(
+          tokenError.message
+        )}&deviceId=${deviceId}`
+      );
+    }
   } catch (error: any) {
+    console.error('Callback handler error:', error.message);
     res.redirect(`mistreal://social-connected?success=false&error=${error.message}`);
   }
 });
@@ -73,9 +128,14 @@ router.post('/sync', async (req: Request, res: Response) => {
     if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
     const user = await User.findOne({ where: { deviceId } });
 
-    if (!user || !user.zernioUserToken) {
+    if (!user) {
+        return res.status(200).json({ summary: "USER_NOT_FOUND", posts: [], platformUpdates: [] });
+    }
+
+    if (!user.connectedPlatforms || user.connectedPlatforms.length === 0) {
         return res.status(200).json({ summary: "CONNECTION_REQUIRED", posts: [], platformUpdates: [] });
     }
+
     const result = await UnifiedSocialService.syncAllPlatforms(user);
     res.json(result);
   } catch (error: any) {
@@ -92,7 +152,22 @@ router.post('/disconnect/:platform', async (req: Request, res: Response) => {
     if (user) {
         const platforms = user.connectedPlatforms || [];
         user.connectedPlatforms = platforms.filter(p => p.toLowerCase() !== platform.toLowerCase());
-        if (user.connectedPlatforms.length === 0) user.zernioUserToken = null;
+
+        // Clear access token for this platform
+        const platformLower = platform.toLowerCase();
+        if (platformLower === 'twitter' || platformLower === 'x') {
+            user.twitterAccessToken = null;
+            user.twitterRefreshToken = null;
+        } else if (platformLower === 'instagram') {
+            user.instagramAccessToken = null;
+        } else if (platformLower === 'whatsapp' || platformLower === 'whatsapp_business') {
+            user.whatsappAccessToken = null;
+        } else if (platformLower === 'facebook') {
+            user.facebookAccessToken = null;
+        } else if (platformLower === 'linkedin') {
+            user.linkedinAccessToken = null;
+        }
+
         await user.save();
     }
     res.json({ success: true, platform, message: `${platform} disconnected` });
