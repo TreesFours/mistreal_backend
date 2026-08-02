@@ -21,9 +21,8 @@ export interface SocialPlatformDefinition {
 }
 
 /**
- * 🛠️ THE HYBRID BRIDGE LOGIC
- * If direct API keys exist in .env, use them.
- * Otherwise, automatically fallback to Zernio.
+ * 🛠️ THE UNIVERSAL SOCIAL HUB
+ * Prioritizes Zernio's professional bridge while remaining future-ready for direct APIs.
  */
 const PLATFORM_DEFINITIONS: Record<string, SocialPlatformDefinition> = {
   twitter: {
@@ -36,6 +35,7 @@ const PLATFORM_DEFINITIONS: Record<string, SocialPlatformDefinition> = {
     tokenField: 'twitterAccessToken',
     refreshTokenField: 'twitterRefreshToken',
     getAuthUrl: (deviceId, callbackUrl) => {
+      // Use direct API if keys are provided, otherwise use Zernio Bridge
       return process.env.TWITTER_CLIENT_ID
         ? TwitterOAuth.getAuthUrl(deviceId, callbackUrl)
         : ZernioAdapter.getAuthUrl(deviceId, callbackUrl, 'twitter');
@@ -51,8 +51,8 @@ const PLATFORM_DEFINITIONS: Record<string, SocialPlatformDefinition> = {
         ? TwitterOAuth.fetchUserPosts(user.twitterAccessToken)
         : ZernioAdapter.fetchContent(user.twitterAccessToken, 'twitter');
     },
-    postContent: async (user: User, content: string) => {
-      if (!user.twitterAccessToken) throw new Error('Twitter not connected');
+    postContent: async (user: User, content: string, type: string) => {
+      if (!user.twitterAccessToken) throw new Error('X not connected');
       return ZernioAdapter.sendAction(user.twitterAccessToken, 'twitter', { type: 'post', content });
     }
   },
@@ -65,25 +65,25 @@ const PLATFORM_DEFINITIONS: Record<string, SocialPlatformDefinition> = {
     aliases: ['whatsapp_business'],
     tokenField: 'whatsappAccessToken',
     getAuthUrl: (deviceId, callbackUrl) => {
-      return process.env.WHATSAPP_CLIENT_ID
-        ? WhatsAppOAuth.getAuthUrl(deviceId, callbackUrl)
-        : ZernioAdapter.getAuthUrl(deviceId, callbackUrl, 'whatsapp');
+      // WhatsApp Meta Embedded Signup requires a hosted bridge
+      const appUrl = process.env.APP_URL || 'https://mistreal-backend.onrender.com';
+      return `${appUrl}/api/social/whatsapp/bridge?deviceId=${deviceId}`;
     },
-    exchangeCodeForToken: (code, callbackUrl) => {
-      return process.env.WHATSAPP_CLIENT_ID
-        ? WhatsAppOAuth.exchangeCodeForToken(code, callbackUrl)
-        : ZernioAdapter.exchangeCodeForToken(code, callbackUrl, 'whatsapp');
+    exchangeCodeForToken: async (code, callbackUrl) => {
+      // This is handled by the dedicated /whatsapp/callback route
+      return ZernioAdapter.completeWhatsAppSignup(code);
     },
     fetchContent: async (user: User) => {
       if (!user.whatsappAccessToken) return [];
-      return process.env.WHATSAPP_CLIENT_ID
-        ? WhatsAppOAuth.fetchMessages(user.whatsappAccessToken, process.env.WHATSAPP_BUSINESS_PHONE_ID || '')
-        : ZernioAdapter.fetchContent(user.whatsappAccessToken, 'whatsapp');
+      // Use Zernio professional fetch for WhatsApp messages/status
+      return ZernioAdapter.fetchContent(user.whatsappAccessToken, 'whatsapp');
     },
     postContent: async (user: User, content: string, type: string) => {
       if (!user.whatsappAccessToken) throw new Error('WhatsApp not connected');
-      // type can be 'status' or 'message'
-      return ZernioAdapter.sendAction(user.whatsappAccessToken, 'whatsapp', { type: type === 'status' ? 'status_update' : 'message', content });
+      return ZernioAdapter.sendAction(user.whatsappAccessToken, 'whatsapp', {
+        type: type === 'status' ? 'status_update' : 'message',
+        content
+      });
     }
   },
   instagram: {
@@ -95,20 +95,22 @@ const PLATFORM_DEFINITIONS: Record<string, SocialPlatformDefinition> = {
     aliases: [],
     tokenField: 'instagramAccessToken',
     getAuthUrl: (deviceId, callbackUrl) => {
-      return process.env.INSTAGRAM_CLIENT_ID
-        ? InstagramOAuth.getAuthUrl(deviceId, callbackUrl)
-        : ZernioAdapter.getAuthUrl(deviceId, callbackUrl, 'instagram');
+      // Professional Instagram bridge (Requires Creator/Business account)
+      return ZernioAdapter.getAuthUrl(deviceId, callbackUrl, 'instagram');
     },
     exchangeCodeForToken: (code, callbackUrl) => {
-      return process.env.INSTAGRAM_CLIENT_ID
-        ? InstagramOAuth.exchangeCodeForToken(code, callbackUrl)
-        : ZernioAdapter.exchangeCodeForToken(code, callbackUrl, 'instagram');
+      return ZernioAdapter.exchangeCodeForToken(code, callbackUrl, 'instagram');
     },
     fetchContent: async (user: User) => {
       if (!user.instagramAccessToken) return [];
-      return process.env.INSTAGRAM_CLIENT_ID
-        ? InstagramOAuth.fetchUserPosts(user.instagramAccessToken)
-        : ZernioAdapter.fetchContent(user.instagramAccessToken, 'instagram');
+      return ZernioAdapter.fetchContent(user.instagramAccessToken, 'instagram');
+    },
+    postContent: async (user: User, content: string, type: string) => {
+      if (!user.instagramAccessToken) throw new Error('Instagram not connected');
+      return ZernioAdapter.sendAction(user.instagramAccessToken, 'instagram', {
+        type: type === 'status' ? 'story' : 'post',
+        content
+      });
     }
   },
   facebook: {
@@ -119,21 +121,15 @@ const PLATFORM_DEFINITIONS: Record<string, SocialPlatformDefinition> = {
     isProOnly: true,
     aliases: [],
     tokenField: 'facebookAccessToken',
-    getAuthUrl: (deviceId, callbackUrl) => {
-      return process.env.FACEBOOK_CLIENT_ID
-        ? FacebookOAuth.getAuthUrl(deviceId, callbackUrl)
-        : ZernioAdapter.getAuthUrl(deviceId, callbackUrl, 'facebook');
-    },
-    exchangeCodeForToken: (code, callbackUrl) => {
-      return process.env.FACEBOOK_CLIENT_ID
-        ? FacebookOAuth.exchangeCodeForToken(code, callbackUrl)
-        : ZernioAdapter.exchangeCodeForToken(code, callbackUrl, 'facebook');
-    },
+    getAuthUrl: (deviceId, callbackUrl) => ZernioAdapter.getAuthUrl(deviceId, callbackUrl, 'facebook'),
+    exchangeCodeForToken: (code, callbackUrl) => ZernioAdapter.exchangeCodeForToken(code, callbackUrl, 'facebook'),
     fetchContent: async (user: User) => {
       if (!user.facebookAccessToken) return [];
-      return process.env.FACEBOOK_CLIENT_ID
-        ? FacebookOAuth.fetchUserPosts(user.facebookAccessToken)
-        : ZernioAdapter.fetchContent(user.facebookAccessToken, 'facebook');
+      return ZernioAdapter.fetchContent(user.facebookAccessToken, 'facebook');
+    },
+    postContent: async (user: User, content: string, type: string) => {
+        if (!user.facebookAccessToken) throw new Error('Facebook not connected');
+        return ZernioAdapter.sendAction(user.facebookAccessToken, 'facebook', { type: type === 'status' ? 'story' : 'post', content });
     }
   },
   discord: {
@@ -149,6 +145,10 @@ const PLATFORM_DEFINITIONS: Record<string, SocialPlatformDefinition> = {
     fetchContent: async (user: User) => {
       if (!user.discordAccessToken) return [];
       return ZernioAdapter.fetchContent(user.discordAccessToken, 'discord');
+    },
+    postContent: async (user: User, content: string, type: string) => {
+        if (!user.discordAccessToken) throw new Error('Discord not connected');
+        return ZernioAdapter.sendAction(user.discordAccessToken, 'discord', { type: 'message', content });
     }
   },
   telegram: {
@@ -164,6 +164,48 @@ const PLATFORM_DEFINITIONS: Record<string, SocialPlatformDefinition> = {
     fetchContent: async (user: User) => {
       if (!user.telegramAccessToken) return [];
       return ZernioAdapter.fetchContent(user.telegramAccessToken, 'telegram');
+    },
+    postContent: async (user: User, content: string, type: string) => {
+        if (!user.telegramAccessToken) throw new Error('Telegram not connected');
+        return ZernioAdapter.sendAction(user.telegramAccessToken, 'telegram', { type: 'message', content });
+    }
+  },
+  reddit: {
+    id: 'reddit',
+    displayName: 'Reddit',
+    icon: 'r/',
+    color: '#FF4500',
+    isProOnly: true,
+    aliases: [],
+    tokenField: 'redditAccessToken',
+    getAuthUrl: (deviceId, callbackUrl) => ZernioAdapter.getAuthUrl(deviceId, callbackUrl, 'reddit'),
+    exchangeCodeForToken: (code, callbackUrl) => ZernioAdapter.exchangeCodeForToken(code, callbackUrl, 'reddit'),
+    fetchContent: async (user: User) => {
+      if (!user.redditAccessToken) return [];
+      return ZernioAdapter.fetchContent(user.redditAccessToken, 'reddit');
+    },
+    postContent: async (user: User, content: string, type: string) => {
+        if (!user.redditAccessToken) throw new Error('Reddit not connected');
+        return ZernioAdapter.sendAction(user.redditAccessToken, 'reddit', { type: 'post', content });
+    }
+  },
+  linkedin: {
+    id: 'linkedin',
+    displayName: 'LinkedIn',
+    icon: 'in',
+    color: '#0A66C2',
+    isProOnly: true,
+    aliases: [],
+    tokenField: 'linkedinAccessToken',
+    getAuthUrl: (deviceId, callbackUrl) => ZernioAdapter.getAuthUrl(deviceId, callbackUrl, 'linkedin'),
+    exchangeCodeForToken: (code, callbackUrl) => ZernioAdapter.exchangeCodeForToken(code, callbackUrl, 'linkedin'),
+    fetchContent: async (user: User) => {
+      if (!user.linkedinAccessToken) return [];
+      return ZernioAdapter.fetchContent(user.linkedinAccessToken, 'linkedin');
+    },
+    postContent: async (user: User, content: string, type: string) => {
+        if (!user.linkedinAccessToken) throw new Error('LinkedIn not connected');
+        return ZernioAdapter.sendAction(user.linkedinAccessToken, 'linkedin', { type: 'post', content });
     }
   }
 };

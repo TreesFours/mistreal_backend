@@ -2,11 +2,17 @@ import axios from 'axios';
 import logger from '../utils/logger';
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const GOOGLE_AI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta'; // Standardizing to v1beta for widest support
+const GOOGLE_AI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 
 const FAILURE_THRESHOLD = 3;
-const BREAKER_COOLDOWN_MS = 60000;
 const REQUEST_TIMEOUT_MS = 15000;
+
+export interface AiResponse {
+    content: string;
+    provider: string;
+    success: boolean;
+    error?: string;
+}
 
 // 📦 Professional Multipart File Handlers
 export const extractImageData = (file: Express.Multer.File): string => {
@@ -17,28 +23,13 @@ export const extractAudioData = (file: Express.Multer.File): string => {
     return file.buffer.toString('base64');
 };
 
-let openRouterFailures = 0;
-let lastOpenRouterFailure = 0;
-
-const isOpenRouterBreakerTripped = () => {
-    if (openRouterFailures >= FAILURE_THRESHOLD) {
-        const now = Date.now();
-        if (now - lastOpenRouterFailure < BREAKER_COOLDOWN_MS) return true;
-        openRouterFailures = 0;
-    }
-    return false;
-};
-
 /**
- * 📡 Dynamic Model Registry
+ * 📡 Dynamic Model Registry with Capability & Quota Mapping
  */
 let cachedGeminiModels: any[] = [];
 let lastFetchTime = 0;
 const CACHE_TTL = 1800000; // 30 minutes
 
-/**
- * Step 1 & 2: Fetch and Filter live models from Google
- */
 export const getLiveGeminiModels = async () => {
     const geminiKey = process.env.GEMINI_API_KEY || process.env.GEMINI_API;
     if (!geminiKey) return [];
@@ -52,16 +43,15 @@ export const getLiveGeminiModels = async () => {
         const response = await axios.get(`${GOOGLE_AI_BASE_URL}/models?key=${geminiKey}`);
         const allModels = response.data.models || [];
 
-        // Filter for generateContent capability
+        // Step 2: Capability-Aware Filtering
         const filtered = allModels.filter((m: any) =>
             m.supportedGenerationMethods?.includes('generateContent') &&
-            !(m.name || '').includes('vision') &&
             !(m.name || '').includes('tunedModels')
         );
 
         cachedGeminiModels = filtered;
         lastFetchTime = now;
-        logger.info(`📡 Discovery: Found ${filtered.length} capable Google models.`);
+        logger.info(`📡 AI Discovery: Found ${filtered.length} active models.`);
         return filtered;
     } catch (error: any) {
         logger.error("❌ Google Discovery Failed:", error.message);
@@ -70,27 +60,28 @@ export const getLiveGeminiModels = async () => {
 };
 
 /**
- * Step 3: Sort by version and stability ranking
+ * ⚖️ Stability & Performance Ranking
  */
 const rankModelStability = (model: any): number => {
     const name = (model.name || '').toLowerCase();
     let score = 0;
 
-    // Stability: Prefer stable versions over preview/experimental
+    // Stability Matrix
     if (name.includes('latest')) score += 100;
     if (!name.includes('experimental') && !name.includes('preview')) score += 50;
 
-    // Performance: Prefer 1.5 versions
-    if (name.includes('1.5')) score += 25;
+    // Performance Matrix
+    if (name.includes('1.5')) score += 30;
+    if (name.includes('pro')) score += 20;
 
-    // Cost/Quota: Prefer Flash for general free usage
+    // Efficiency/Quota Matrix (Good for Free Tier)
     if (name.includes('flash')) score += 10;
 
     return score;
 };
 
 /**
- * Step 4: Resolve the absolute "Best Fit" models dynamically (Returning top 3 for failover)
+ * 🎯 The "Best Fit" Resolver
  */
 export const getRankedGeminiModels = async (isPro: boolean = false): Promise<string[]> => {
     const liveModels = await getLiveGeminiModels();
@@ -103,9 +94,14 @@ export const getRankedGeminiModels = async (isPro: boolean = false): Promise<str
     const cleanName = (model: any) => model.name.replace('models/', '');
 
     if (isPro) {
+        // High-Intelligence models for Pro
         const proModels = sorted.filter(m => m.name.toLowerCase().includes('pro')).map(cleanName);
         if (proModels.length > 0) return proModels;
     }
+
+    // High-Quota/Speed models for Free
+    const flashModels = sorted.filter(m => m.name.toLowerCase().includes('flash')).map(cleanName);
+    if (flashModels.length > 0) return flashModels;
 
     return sorted.map(cleanName);
 };
@@ -117,13 +113,15 @@ export const getAvailableModels = async (isPro: boolean) => {
 
     let models = sortedGeminiModels.map((m: any) => {
         const id = m.name.replace('models/', '');
-        const isProModel = id.includes('pro');
+        const isProModel = id.includes('pro') || (m.inputTokenLimit > 128000);
         return {
             id,
             name: m.displayName,
             provider: 'google',
             isProOnly: isProModel,
-            price: isProModel ? 'PRO' : 'Free'
+            price: isProModel ? 'PRO' : 'Free',
+            quota: m.inputTokenLimit > 1000000 ? "Massive" : "Standard",
+            features: m.supportedGenerationMethods?.length || 0
         };
     });
 
@@ -132,13 +130,15 @@ export const getAvailableModels = async (isPro: boolean) => {
             const response = await axios.get('https://openrouter.ai/api/v1/models');
             if (response.data?.data) {
                 const premium = response.data.data
-                    .filter((m: any) => m.id.includes('gpt-4') || m.id.includes('claude'))
+                    .filter((m: any) => m.id.includes('gpt-4') || m.id.includes('claude') || m.id.includes('llama-3.1-405b'))
                     .map((m: any) => ({
                         id: m.id,
                         name: m.name,
                         provider: 'openrouter',
                         isProOnly: true,
-                        price: 'PRO'
+                        price: 'PRO',
+                        quota: "Premium",
+                        features: 3
                     }));
                 models = [...models, ...(isPro ? premium : premium.slice(0, 3))];
             }
@@ -148,37 +148,38 @@ export const getAvailableModels = async (isPro: boolean) => {
     return models;
 };
 
-interface AiResponse {
-    content: string;
-    provider: string;
-    success: boolean;
-    error?: string;
-}
-
 /**
- * 🛡️ EXECUTION WITH SELF-HEALING FAILOVER
+ * 🛡️ UNIVERSAL AI EXECUTION (With Smart Failover)
  */
 export const getAiResponse = async (prompt: string, provider: string, history: any[], user?: any, imageDatas?: string[], audioData?: string): Promise<AiResponse> => {
     const geminiKey = process.env.GEMINI_API_KEY || process.env.GEMINI_API;
     const openRouterKey = process.env.OPENROUTER_API_KEY;
 
     let activeProvider = provider;
-    const isGoogleModel = !activeProvider.includes('/');
+    const isGoogleModel = !activeProvider.includes('/') && activeProvider !== 'openrouter';
 
     const persona = user?.aiPersona || 'Shadow';
     const systemInstruction = `You are Mistreal AI, currently operating under the '${persona}' persona.
     Adhere strictly to this character trait. Current Date/Time: ${new Date().toUTCString()}.`;
 
     if (isGoogleModel && geminiKey) {
-        // 🚀 DISCOVERY FAILOVER: Try the top ranked models sequentially if one fails with 404
-        const candidates = await getRankedGeminiModels(user?.isPro);
-        const modelsToTry = candidates.slice(0, 3); // Try top 3 most stable
+        // 🚀 DISCOVERY FAILOVER: Try the requested model, then failover to best ranked
+        const rankedCandidates = await getRankedGeminiModels(user?.isPro);
+
+        // Build sequence: [User's specific choice (if not 'dynamic'), Top Candidate, Second Candidate, Third Candidate]
+        const modelsToTry: string[] = [];
+        if (activeProvider !== 'dynamic' && !activeProvider.includes('google')) {
+            modelsToTry.push(activeProvider);
+        }
+        rankedCandidates.slice(0, 3).forEach(m => {
+            if (!modelsToTry.includes(m)) modelsToTry.push(m);
+        });
 
         let lastError = "";
 
         for (const targetModel of modelsToTry) {
             try {
-                logger.info(`🤖 Attempting Gemini: ${targetModel}`);
+                logger.info(`🤖 Intelligence Routing: Attempting ${targetModel}`);
 
                 const contents = history.map((m: any) => ({
                     role: m.role === 'assistant' ? 'model' : 'user',
@@ -204,38 +205,39 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
                         success: true
                     };
                 }
-                throw new Error('Empty response from model');
+                throw new Error('Null response from candidate.');
             } catch (error: any) {
                 const status = error.response?.status;
                 const errorMsg = error.response?.data?.error?.message || error.message;
                 lastError = errorMsg;
 
-                logger.warn(`⚠️ Model Fail [${targetModel}] [Status: ${status}]: ${errorMsg}`);
+                logger.warn(`⚠️ Routing Warning [${targetModel}] [Status: ${status}]: ${errorMsg}`);
 
-                // If it's a 429, don't failover, just report it (it's a key limit, not a model limit)
+                // If it's a 429, the whole API Key is limited. Don't waste time on failover.
                 if (status === 429) {
                     return { content: '', provider: targetModel, success: false, error: "RATE_LIMIT_REACHED" };
                 }
 
-                // If it's a 404 or 503, try the next model in the list
+                // If it's a 404, 503, or 500, try the next model in the sequence.
                 continue;
             }
         }
 
-        // 🚨 ULTIMATE FAILOVER: If Google fails entirely, try OpenRouter free model
+        // 🚨 ULTIMATE EMERGENCY PIVOT: If all Google candidates fail, try OpenRouter as a bridge.
         if (openRouterKey) {
-            logger.error(`🚨 Google failed entirely (${lastError}). Pivoting to OpenRouter failover...`);
-            return await getAiResponse(prompt, 'google/gemini-flash-1.5-exp', history, user, imageDatas, audioData);
+            logger.error(`🚨 Global Google failure. Pivoting to OpenRouter bridge...`);
+            return await getAiResponse(prompt, 'google/gemini-flash-1.5', history, user, imageDatas, audioData);
         }
 
-        return { content: '', provider: 'discovery', success: false, error: `Critical Failure: All AI candidates failed. Last Error: ${lastError}` };
+        return { content: '', provider: 'emergency', success: false, error: `Critical Failure: All AI systems failed. Last error: ${lastError}` };
     }
 
+    // --- OpenRouter Standard Execution ---
     if (!openRouterKey) return { success: false, error: "AI Key missing." };
 
     try {
         const response = await axios.post(OPENROUTER_API_URL, {
-            model: activeProvider,
+            model: activeProvider === 'dynamic' ? 'google/gemini-flash-1.5' : activeProvider,
             messages: [
                 { role: 'system', content: systemInstruction },
                 ...history.map((m: any) => ({ role: m.role, content: m.content })),
@@ -246,7 +248,8 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
                 'Authorization': `Bearer ${openRouterKey}`,
                 'HTTP-Referer': 'https://mistreal-assistant.com',
                 'X-Title': 'Mistreal Assistant'
-            }
+            },
+            timeout: REQUEST_TIMEOUT_MS
         });
 
         if (response.data?.choices?.[0]?.message?.content) {
@@ -256,13 +259,13 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
                 success: true
             };
         }
-        throw new Error('OpenRouter empty response');
+        throw new Error('OpenRouter returned an empty choices array.');
     } catch (error: any) {
         return {
             content: '',
             provider: activeProvider,
             success: false,
-            error: error.message
+            error: error.response?.data?.error?.message || error.message
         };
     }
 };

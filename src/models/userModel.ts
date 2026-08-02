@@ -27,10 +27,13 @@ export class User extends Model {
     public twitterRefreshToken!: string | null;
     public instagramAccessToken!: string | null;
     public whatsappAccessToken!: string | null;
+    public whatsappWabaId!: string | null;
+    public whatsappPhoneId!: string | null;
     public facebookAccessToken!: string | null;
     public linkedinAccessToken!: string | null;
     public discordAccessToken!: string | null;
     public telegramAccessToken!: string | null;
+    public redditAccessToken!: string | null;
 }
 
 User.init({
@@ -58,10 +61,13 @@ User.init({
     twitterRefreshToken: { type: DataTypes.TEXT, allowNull: true },
     instagramAccessToken: { type: DataTypes.TEXT, allowNull: true },
     whatsappAccessToken: { type: DataTypes.TEXT, allowNull: true },
+    whatsappWabaId: { type: DataTypes.STRING, allowNull: true },
+    whatsappPhoneId: { type: DataTypes.STRING, allowNull: true },
     facebookAccessToken: { type: DataTypes.TEXT, allowNull: true },
     linkedinAccessToken: { type: DataTypes.TEXT, allowNull: true },
     discordAccessToken: { type: DataTypes.TEXT, allowNull: true },
-    telegramAccessToken: { type: DataTypes.TEXT, allowNull: true }
+    telegramAccessToken: { type: DataTypes.TEXT, allowNull: true },
+    redditAccessToken: { type: DataTypes.TEXT, allowNull: true }
 }, {
     sequelize,
     modelName: 'User',

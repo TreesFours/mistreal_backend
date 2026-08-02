@@ -92,5 +92,35 @@ export const ZernioAdapter = {
       console.error(`Zernio action failed for ${platform}:`, error.response?.data || error.message);
       throw new Error(`Social action failed: ${error.response?.data?.error || error.message}`);
     }
+  },
+
+  // === WHATSAPP EMBEDDED SIGNUP (META APPROVED) ===
+  getWhatsAppSdkConfig: async () => {
+    try {
+      const resp = await axios.get(`${ZERNIO_API_URL}/v1/connect/whatsapp/sdk-config`, {
+        headers: { 'Authorization': `ApiKey ${ZERNIO_API_KEY}` }
+      });
+      return resp.data; // { appId, configId }
+    } catch (error: any) {
+      console.error('Failed to fetch WhatsApp SDK config:', error.message);
+      throw error;
+    }
+  },
+
+  completeWhatsAppSignup: async (code: string) => {
+    try {
+      const resp = await axios.post(`${ZERNIO_API_URL}/v1/connect/whatsapp/embedded-signup`, {
+        code
+      }, {
+        headers: {
+          'Authorization': `ApiKey ${ZERNIO_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      return resp.data; // { accessToken, wabaId, phoneNumberId }
+    } catch (error: any) {
+      console.error('Failed to complete WhatsApp signup:', error.response?.data || error.message);
+      throw error;
+    }
   }
 };
