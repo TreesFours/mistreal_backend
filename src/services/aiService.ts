@@ -148,10 +148,17 @@ export const getAvailableModels = async (isPro: boolean) => {
     return models;
 };
 
+interface AiResponse {
+    content: string;
+    provider: string;
+    success: boolean;
+    error?: string;
+}
+
 /**
  * 🛡️ EXECUTION WITH SELF-HEALING FAILOVER
  */
-export const getAiResponse = async (prompt: string, provider: string, history: any[], user?: any, imageDatas?: string[], audioData?: string) => {
+export const getAiResponse = async (prompt: string, provider: string, history: any[], user?: any, imageDatas?: string[], audioData?: string): Promise<AiResponse> => {
     const geminiKey = process.env.GEMINI_API_KEY || process.env.GEMINI_API;
     const openRouterKey = process.env.OPENROUTER_API_KEY;
 
