@@ -157,8 +157,8 @@ setInterval(async () => {
         const pendingActions = await DelayedAction.findAll({ where: { status: 'pending', executeAt: { [Op.lte]: new Date() } } });
         for (const action of pendingActions) {
             const user = await User.findOne({ where: { deviceId: action.deviceId } });
-            if (user && user.zernioUserToken) {
-                await sendSocialAction(user.zernioUserToken, { type: action.type, platform: action.platform, content: action.content, targetId: action.targetId });
+            if (user) {
+                await sendSocialAction(user, { type: action.type, platform: action.platform, content: action.content, targetId: action.targetId });
                 action.status = 'completed';
                 await action.save();
             }

@@ -1,6 +1,7 @@
 import { Queue, Worker, Job } from 'bullmq';
 import IORedis from 'ioredis';
 import { sendSocialAction } from './socialService';
+import { User } from '../models/userModel';
 import logger from '../utils/logger';
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
@@ -14,12 +15,16 @@ export const socialActionQueue = new Queue('socialActions', { connection });
 
 // 2. Create the Worker to process scheduled tasks
 const worker = new Worker('socialActions', async (job: Job) => {
-    const { deviceId, action, userToken } = job.data;
+    const { deviceId, action } = job.data;
 
     logger.info(`🤖 Processing scheduled social action for ${deviceId}`, { jobId: job.id });
 
     try {
-        await sendSocialAction(userToken, action);
+        const user = await User.findOne({ where: { deviceId } });
+        if (!user) {
+            throw new Error(`User ${deviceId} not found for scheduled action`);
+        }
+        await sendSocialAction(user, action);
         logger.info(`✅ Successfully dispatched scheduled action for ${deviceId}`);
     } catch (error: any) {
         logger.error(`❌ Failed to dispatch scheduled action for ${deviceId}:`, error.message);
