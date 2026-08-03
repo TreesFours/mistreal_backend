@@ -30,7 +30,7 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
         );
 
         const platformUpdates = filteredItems.reduce((acc: any[], item: any) => {
-            const existing = acc.find(p => p.platform === item.platform);
+            const existing = acc.find((p: any) => p.platform === item.platform);
             if (existing) {
                 existing.count++;
             } else {
