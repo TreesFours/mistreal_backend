@@ -6,11 +6,30 @@ import { ZernioAdapter } from '../services/socialPlatforms/zernioAdapter';
 import { User } from '../models/userModel';
 
 const router = Router();
-...
+
 // 🛡️ Internal Helper
-...
-// 📱 Get Available Platforms (RESTORED HERE)
-...
+const getOrCreateUser = async (deviceId: string) => {
+    try {
+        const [user] = await User.findOrCreate({
+            where: { deviceId },
+            defaults: { deviceId, isPro: false, subscriptionTier: 'free' }
+        });
+        return user;
+    } catch (e) { return null; }
+};
+
+// 📱 Get Available Platforms
+router.get('/platforms', async (req: Request, res: Response) => {
+    const { deviceId } = req.query;
+    let isPro = false;
+    if (deviceId) {
+        const user = await getOrCreateUser(String(deviceId));
+        isPro = user?.isPro ?? false;
+    }
+    const platforms = await getAvailablePlatforms(isPro);
+    res.json(platforms);
+});
+
 // === PROFESSIONAL DIRECT OAUTH ROUTES ===
 router.get('/connect/:platform', async (req: Request, res: Response) => {
   const { platform } = req.params;
@@ -31,6 +50,87 @@ router.get('/connect/:platform', async (req: Request, res: Response) => {
     res.json({ authUrl, deviceId });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/callback', async (req: Request, res: Response) => {
+  try {
+    const { code, state, platform, error: oauthError } = req.query;
+
+    // Decode state
+    let deviceId: string = '';
+    let decodedPlatform: string = '';
+    try {
+      const decoded = JSON.parse(Buffer.from(state as string, 'base64').toString());
+      deviceId = decoded.deviceId || '';
+      decodedPlatform = decoded.platform || (platform as string);
+    } catch (e) {
+      console.error('Failed to decode state:', e);
+      return res.redirect(`mistreal://social-connected?success=false&error=Invalid state`);
+    }
+
+    if (oauthError) {
+      return res.redirect(
+        `mistreal://social-connected?platform=${decodedPlatform}&success=false&error=${oauthError}&deviceId=${deviceId}`
+      );
+    }
+
+    if (!code || !deviceId) {
+      return res.redirect(
+        `mistreal://social-connected?platform=${decodedPlatform}&success=false&error=Missing code or deviceId&deviceId=${deviceId}`
+      );
+    }
+
+    try {
+      // Exchange code for token
+      const tokenData = await exchangeOAuthCode(decodedPlatform, code as string);
+
+      // Find or create user
+      const user = await getOrCreateUser(deviceId);
+      if (!user) {
+        throw new Error('Failed to find or create user');
+      }
+
+      // Store platform token generically using registry metadata
+      const platformDefinition = getPlatformDefinition(decodedPlatform);
+      if (!platformDefinition) {
+        throw new Error(`Unsupported platform: ${decodedPlatform}`);
+      }
+
+      const tokenField = platformDefinition.tokenField;
+      if (tokenField) {
+        (user as any)[tokenField] = tokenData.accessToken;
+      }
+
+      if (platformDefinition.refreshTokenField) {
+        (user as any)[platformDefinition.refreshTokenField] = tokenData.refreshToken || null;
+      }
+
+      // Add canonical platform ID into connectedPlatforms
+      const connectedPlatforms = user.connectedPlatforms || [];
+      const canonicalPlatform = platformDefinition.id;
+      if (!connectedPlatforms.includes(canonicalPlatform)) {
+        connectedPlatforms.push(canonicalPlatform);
+        user.connectedPlatforms = connectedPlatforms;
+      }
+
+      await user.save();
+
+      // Redirect back to app with success
+      res.redirect(
+        `mistreal://social-connected?platform=${decodedPlatform}&success=true&deviceId=${deviceId}`
+      );
+    } catch (tokenError: any) {
+      console.error('Token exchange error:', tokenError.message);
+      res.redirect(
+        `mistreal://social-connected?platform=${decodedPlatform}&success=false&error=${encodeURIComponent(
+          tokenError.message
+        )}&deviceId=${deviceId}`
+      );
+    }
+  } catch (error: any) {
+    console.error('Callback handler error:', error.message);
+    res.redirect(`mistreal://social-connected?success=false&error=${error.message}`);
   }
 });
 
@@ -151,7 +251,6 @@ router.get('/whatsapp/callback', async (req: Request, res: Response) => {
         res.redirect(`mistreal://social-connected?platform=whatsapp&success=false&error=${encodeURIComponent(error.message)}&deviceId=${deviceId}`);
     }
 });
-...
 
 router.post('/action', async (req: Request, res: Response) => {
   try {
