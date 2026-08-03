@@ -60,7 +60,7 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
             summary: items.length > 0 ? `Unified Intelligence: ${items.length} new signals.` : 'Your intelligence feeds are silent.',
             platformUpdates,
             posts,
-            rawContent: posts.map(p => `[${p.platform}] ${p.author}: ${p.content}`).join('\n')
+            rawContent: posts.map((p: any) => `[${p.platform}] ${p.author}: ${p.content}`).join('\n')
         };
     } catch (error: any) {
         return { summary: "SYNC_ERROR", platformUpdates: [], posts: [], rawContent: "" };
@@ -83,7 +83,7 @@ export const createConnectSession = async (platform: string, deviceId: string) =
         }
 
         // 2. Get the redirect URL
-        return await ZernioAdapter.getAuthUrl(platform, user.zernioProfileId);
+        return await ZernioAdapter.getAuthUrl(platform, user.zernioProfileId!);
     } catch (error: any) {
         throw new Error(`Social connection failed: ${error.message}`);
     }
