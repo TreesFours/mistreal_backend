@@ -233,7 +233,7 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
     }
 
     // --- OpenRouter Standard Execution ---
-    if (!openRouterKey) return { success: false, error: "AI Key missing." };
+    if (!openRouterKey) return { content: '', provider: activeProvider, success: false, error: "AI Key missing." };
 
     try {
         const response = await axios.post(OPENROUTER_API_URL, {
