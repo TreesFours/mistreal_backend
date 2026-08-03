@@ -96,24 +96,35 @@ export const ZernioAdapter = {
 
   // === WHATSAPP EMBEDDED SIGNUP (META APPROVED) ===
   getWhatsAppSdkConfig: async () => {
+    if (!ZERNIO_API_KEY) {
+      throw new Error('MISSING_ZERNIO_API_KEY: Please add ZERNIO_API_KEY to your Render environment variables.');
+    }
+
     try {
+      // Standardizing to Bearer as requested by professional SDK integrations
       const resp = await axios.get(`${ZERNIO_API_URL}/v1/connect/whatsapp/sdk-config`, {
-        headers: { 'Authorization': `ApiKey ${ZERNIO_API_KEY}` }
+        headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
       });
       return resp.data; // { appId, configId }
     } catch (error: any) {
+      const status = error.response?.status;
+      if (status === 401) {
+        throw new Error('Zernio API key is invalid or unauthorized (401). Check your credentials.');
+      }
       console.error('Failed to fetch WhatsApp SDK config:', error.message);
       throw error;
     }
   },
 
   completeWhatsAppSignup: async (code: string) => {
+    if (!ZERNIO_API_KEY) throw new Error('MISSING_ZERNIO_API_KEY');
+
     try {
       const resp = await axios.post(`${ZERNIO_API_URL}/v1/connect/whatsapp/embedded-signup`, {
         code
       }, {
         headers: {
-          'Authorization': `ApiKey ${ZERNIO_API_KEY}`,
+          'Authorization': `Bearer ${ZERNIO_API_KEY}`,
           'Content-Type': 'application/json'
         }
       });
