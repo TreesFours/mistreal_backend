@@ -34,22 +34,23 @@ router.get('/platforms', async (req: Request, res: Response) => {
 router.get('/connect/:platform', async (req: Request, res: Response) => {
   const { platform } = req.params;
   const { deviceId } = req.query;
-  if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
+  if (!deviceId) return res.status(400).send('Device ID is required');
+
+  const appUrl = process.env.APP_URL || 'https://mistreal-backend.onrender.com';
 
   // SPECIAL CASE: WhatsApp Meta Embedded Signup
   if (platform === 'whatsapp') {
-    const appUrl = process.env.APP_URL || 'https://mistreal-backend.onrender.com';
-    return res.json({
-        authUrl: `${appUrl}/api/social/whatsapp/bridge?deviceId=${deviceId}`,
-        deviceId
-    });
+    // REDIRECT instead of returning JSON
+    return res.redirect(`${appUrl}/api/social/whatsapp/bridge?deviceId=${deviceId}`);
   }
 
   try {
     const authUrl = await createConnectSession(platform as string, deviceId as string);
-    res.json({ authUrl, deviceId });
+    // REDIRECT instead of returning JSON
+    res.redirect(authUrl);
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    console.error(`Failed to create connection for ${platform}:`, error.message);
+    res.status(500).send(`Connection System Error: ${error.message}`);
   }
 });
 
@@ -145,6 +146,10 @@ router.get('/whatsapp/bridge', async (req: Request, res: Response) => {
     try {
         const config = await ZernioAdapter.getWhatsAppSdkConfig();
 
+        if (!config.appId || !config.configId) {
+            return res.status(500).send('Bridge Configuration Missing: Please ensure Meta App ID and Config ID are set in Zernio.');
+        }
+
         // Simple HTML bridge to run Meta SDK
         const html = `
             <!DOCTYPE html>
@@ -153,24 +158,29 @@ router.get('/whatsapp/bridge', async (req: Request, res: Response) => {
                 <title>Connect WhatsApp</title>
                 <meta name="viewport" content="width=device-width, initial-scale=1">
                 <style>
-                    body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #f0f2f5; }
-                    .card { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); text-align: center; max-width: 400px; }
-                    button { background: #25D366; color: white; border: none; padding: 12px 24px; border-radius: 24px; font-weight: bold; cursor: pointer; font-size: 1rem; margin-top: 1rem; }
-                    .loader { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 30px; height: 30px; animation: spin 2s linear infinite; display: none; margin: 10px auto; }
+                    body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #f0f2f5; padding: 16px; }
+                    .card { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); text-align: center; max-width: 400px; width: 100%; }
+                    button { background: #25D366; color: white; border: none; padding: 14px 28px; border-radius: 28px; font-weight: bold; cursor: pointer; font-size: 1.1rem; margin-top: 1rem; transition: background 0.3s; width: 100%; }
+                    button:active { background: #128C7E; }
+                    .loader { border: 4px solid #f3f3f3; border-top: 4px solid #25D366; border-radius: 50%; width: 30px; height: 30px; animation: spin 2s linear infinite; display: none; margin: 10px auto; }
                     @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
                 </style>
             </head>
             <body>
                 <div class="card">
-                    <h2>Connect WhatsApp</h2>
-                    <p>Click the button below to link your WhatsApp Business account via Meta.</p>
+                    <h2 style="margin-top: 0;">Connect WhatsApp</h2>
+                    <p>Link your WhatsApp Business account safely via Meta's secure gateway.</p>
                     <button id="connectBtn">Connect with Meta</button>
                     <div id="loader" class="loader"></div>
-                    <p id="status" style="color: #666; font-size: 0.9rem;"></p>
+                    <p id="status" style="color: #666; font-size: 0.9rem; margin-top: 12px; min-height: 1.2em;"></p>
                 </div>
 
+                <div id="fb-root"></div>
                 <script>
+                    console.log('🚀 Bridge Initializing...');
+
                     window.fbAsyncInit = function() {
+                        console.log('✅ FB SDK Loaded');
                         FB.init({
                             appId: '${config.appId}',
                             cookie: true,
@@ -188,28 +198,41 @@ router.get('/whatsapp/bridge', async (req: Request, res: Response) => {
                     }(document, 'script', 'facebook-jssdk'));
 
                     document.getElementById('connectBtn').onclick = function() {
-                        this.style.display = 'none';
-                        document.getElementById('loader').style.display = 'block';
-                        document.getElementById('status').innerText = 'Opening Meta secure popup...';
+                        console.log('🔘 Button Clicked');
+                        const btn = this;
+                        const loader = document.getElementById('loader');
+                        const status = document.getElementById('status');
 
-                        FB.login(function(response) {
-                            if (response.authResponse) {
-                                const code = response.authResponse.code;
-                                document.getElementById('status').innerText = 'Securing connection with Mistreal...';
-                                // Send code to our callback
-                                window.location.href = '/api/social/whatsapp/callback?code=' + code + '&deviceId=${deviceId}';
-                            } else {
-                                document.getElementById('status').innerText = 'Connection cancelled by user.';
-                                document.getElementById('connectBtn').style.display = 'inline-block';
-                                document.getElementById('loader').style.display = 'none';
-                            }
-                        }, {
-                            scope: 'whatsapp_business_management,whatsapp_business_messaging',
-                            extras: {
-                                feature: 'whatsapp_embedded_signup',
-                                config_id: '${config.configId}'
-                            }
-                        });
+                        btn.style.display = 'none';
+                        loader.style.display = 'block';
+                        status.innerText = 'Initializing Meta Secure Login...';
+
+                        try {
+                            FB.login(function(response) {
+                                console.log('👤 FB Login Response:', response);
+                                if (response.authResponse) {
+                                    const code = response.authResponse.code;
+                                    status.innerText = 'Secure Code Received! Redirecting...';
+                                    window.location.href = '/api/social/whatsapp/callback?code=' + code + '&deviceId=${deviceId}';
+                                } else {
+                                    console.warn('❌ Login Cancelled or Failed');
+                                    status.innerText = 'Connection cancelled or failed.';
+                                    btn.style.display = 'block';
+                                    loader.style.display = 'none';
+                                }
+                            }, {
+                                scope: 'whatsapp_business_management,whatsapp_business_messaging',
+                                extras: {
+                                    feature: 'whatsapp_embedded_signup',
+                                    config_id: '${config.configId}'
+                                }
+                            });
+                        } catch (err) {
+                            console.error('🔥 FB Login Error:', err);
+                            status.innerText = 'SDK Error: ' + err.message;
+                            btn.style.display = 'block';
+                            loader.style.display = 'none';
+                        }
                     };
                 </script>
             </body>

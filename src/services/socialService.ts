@@ -1,5 +1,6 @@
 import { User } from '../models/userModel';
 import { getPlatformDefinition, getAvailablePlatformDefinitions } from './socialPlatforms/platformRegistry';
+import { ZernioAdapter } from './socialPlatforms/zernioAdapter';
 
 export const getAvailablePlatforms = async (isPro: boolean) => {
     return getAvailablePlatformDefinitions(isPro).map(def => ({
@@ -11,114 +12,93 @@ export const getAvailablePlatforms = async (isPro: boolean) => {
     }));
 };
 
+/**
+ * 🔄 Official Zernio Sync logic
+ * Now uses the Profile ID to fetch a Unified Inbox.
+ */
 export const getSocialSummary = async (user: User, isPro: boolean = false) => {
-    const posts: any[] = [];
-    const platformUpdates: Record<string, any> = {};
+    if (!user.zernioProfileId) {
+        return { summary: "CONNECTION_REQUIRED", platformUpdates: [], posts: [], rawContent: "" };
+    }
 
     try {
-        const connectedPlatforms = user.connectedPlatforms || [];
-        const platformDefinitions = connectedPlatforms
-            .map(platformId => getPlatformDefinition(platformId))
-            .filter(Boolean) as any[];
+        const items = await ZernioAdapter.fetchInbox(user.zernioProfileId);
 
-        for (const definition of platformDefinitions) {
-            try {
-                const tokenField = definition.tokenField;
-                if (!tokenField) continue;
+        // Filter based on tier if necessary
+        const filteredItems = isPro ? items : items.filter((i: any) =>
+            ['twitter', 'x', 'whatsapp'].includes(i.platform.toLowerCase())
+        );
 
-                const accessToken = (user as any)[tokenField];
-                if (!accessToken) continue;
-
-                if (!definition.fetchContent) continue;
-
-                const platformPosts = await definition.fetchContent(user);
-                posts.push(...platformPosts);
-                platformUpdates[definition.id] = {
-                    platform: definition.id,
-                    count: platformPosts.length,
-                    platformIcon: definition.icon,
-                    platformColor: definition.color,
-                    platformDisplayName: definition.displayName,
+        const platformUpdates = filteredItems.reduce((acc: any[], item: any) => {
+            const existing = acc.find(p => p.platform === item.platform);
+            if (existing) {
+                existing.count++;
+            } else {
+                const def = getPlatformDefinition(item.platform);
+                acc.push({
+                    platform: item.platform,
+                    count: 1,
+                    platformIcon: def?.icon || '🔗',
+                    platformColor: def?.color || '#888',
+                    platformDisplayName: def?.displayName || item.platform,
                     connected: true
-                };
-            } catch (error: any) {
-                console.error(`Failed to fetch posts for ${definition.id}:`, error.message || error);
+                });
             }
-        }
+            return acc;
+        }, []);
 
-        // Sort by timestamp
-        posts.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-
-        const rawContent = posts
-            .map(p => `[${p.platform}] ${p.author}: ${p.content}`)
-            .join('\n');
+        const posts = filteredItems.map((it: any) => ({
+            id: it._id,
+            platform: it.platform,
+            author: it.author?.name || 'Social Contact',
+            content: it.content?.text || it.content?.body || '',
+            timestamp: it.createdAt,
+            sourceUrl: null
+        }));
 
         return {
-            summary: posts.length > 0
-                ? `Synced ${posts.length} posts from ${Object.keys(platformUpdates).length} platforms`
-                : 'No connected platforms or no new posts',
-            platformUpdates: Object.values(platformUpdates),
+            summary: items.length > 0 ? `Unified Intelligence: ${items.length} new signals.` : 'Your intelligence feeds are silent.',
+            platformUpdates,
             posts,
-            rawContent
+            rawContent: posts.map(p => `[${p.platform}] ${p.author}: ${p.content}`).join('\n')
         };
     } catch (error: any) {
-        console.error('Social sync error:', error.message);
-        return {
-            summary: 'Failed to sync socials. Try reconnecting.',
-            platformUpdates: [],
-            posts: [],
-            rawContent: ''
-        };
+        return { summary: "SYNC_ERROR", platformUpdates: [], posts: [], rawContent: "" };
     }
 };
 
+/**
+ * 🔗 Step 1 & 2 combined: Create Profile and Get Redirect
+ */
 export const createConnectSession = async (platform: string, deviceId: string) => {
-    const appUrl = process.env.APP_URL || 'https://mistreal-backend.onrender.com';
-    const callbackUrl = `${appUrl}/api/social/callback`;
-
     try {
-        const definition = getPlatformDefinition(platform);
-        if (!definition) {
-            throw new Error(`Platform ${platform} not supported`);
+        // Find user
+        const user = await User.findOne({ where: { deviceId } });
+        if (!user) throw new Error('User not found');
+
+        // 1. Ensure Profile exists in Zernio
+        if (!user.zernioProfileId) {
+            user.zernioProfileId = await ZernioAdapter.getOrCreateProfile(deviceId);
+            await user.save();
         }
 
-        const authUrl = definition.getAuthUrl(deviceId, callbackUrl);
-        return authUrl;
+        // 2. Get the redirect URL
+        return await ZernioAdapter.getAuthUrl(platform, user.zernioProfileId);
     } catch (error: any) {
-        console.error(`Failed to create OAuth session for ${platform}:`, error.message);
-        throw new Error(`Failed to create ${platform} auth session: ${error.message}`);
+        throw new Error(`Social connection failed: ${error.message}`);
     }
 };
 
-export const exchangeOAuthCode = async (platform: string, code: string): Promise<any> => {
-    const appUrl = process.env.APP_URL || 'https://mistreal-backend.onrender.com';
-    const callbackUrl = `${appUrl}/api/social/callback`;
-
-    try {
-        const definition = getPlatformDefinition(platform);
-        if (!definition) {
-            throw new Error(`Platform ${platform} not supported`);
-        }
-
-        const token = await definition.exchangeCodeForToken(code, callbackUrl);
-        return token;
-    } catch (error: any) {
-        console.error(`Failed to exchange OAuth code for ${platform}:`, error.message);
-        throw error;
-    }
-};
-
+/**
+ * 🚀 Post via Zernio Unified Posts API
+ */
 export const sendSocialAction = async (user: User, action: { platform: string, type: string, content: string, targetId?: string }) => {
-    try {
-        const definition = getPlatformDefinition(action.platform);
-        if (!definition || !definition.postContent) {
-            throw new Error(`Posting not supported for ${action.platform}`);
-        }
+    if (!user.zernioProfileId) throw new Error('Connect your social profile first.');
 
-        const result = await definition.postContent(user, action.content, action.type);
+    try {
+        const result = await ZernioAdapter.sendAction(user.zernioProfileId, action.platform, action.content, action.type);
         return { success: true, data: result };
     } catch (error: any) {
-        console.error('Social action error:', error.message);
-        throw new Error(`Failed to execute social action: ${error.message}`);
+        throw new Error(`Dispatch failed: ${error.message}`);
     }
 };

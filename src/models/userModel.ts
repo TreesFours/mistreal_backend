@@ -21,7 +21,8 @@ export class User extends Model {
     public emergencyContacts!: any[];
     public connectedPlatforms!: string[];
     public unreadMessagesCount!: number;
-    
+    public zernioProfileId!: string | null; // Added for official Zernio SDK flow
+
     // Platform-specific OAuth tokens
     public twitterAccessToken!: string | null;
     public twitterRefreshToken!: string | null;
@@ -55,7 +56,8 @@ User.init({
     emergencyContacts: { type: DataTypes.JSONB, defaultValue: [] },
     connectedPlatforms: { type: DataTypes.ARRAY(DataTypes.STRING), defaultValue: [] },
     unreadMessagesCount: { type: DataTypes.INTEGER, defaultValue: 0 },
-    
+    zernioProfileId: { type: DataTypes.STRING, allowNull: true },
+
     // Platform-specific OAuth tokens
     twitterAccessToken: { type: DataTypes.TEXT, allowNull: true },
     twitterRefreshToken: { type: DataTypes.TEXT, allowNull: true },

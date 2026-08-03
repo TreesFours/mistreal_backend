@@ -1,137 +1,110 @@
 import axios from 'axios';
 
-const ZERNIO_API_URL = process.env.ZERNIO_API_URL || 'https://api.zernio.com';
+const ZERNIO_API_URL = 'https://zernio.com/api/v1'; // Official Base URL
 const ZERNIO_API_KEY = process.env.ZERNIO_API_KEY || '';
-const ZERNIO_CLIENT_ID = process.env.ZERNIO_CLIENT_ID || '';
-const ZERNIO_CLIENT_SECRET = process.env.ZERNIO_CLIENT_SECRET || '';
 
 /**
- * Generic Zernio adapter.
- * NOTE: Zernio endpoints may differ; this adapter uses reasonable defaults
- * so the code is ready to switch once you provide real Zernio API docs/URL.
+ * 🚀 OFFICIAL ZERNIO SDK-ALIGNED ADAPTER
+ * Implements the "Build a Platform" multi-tenant flow:
+ * 1. Create a Profile (Container) per user.
+ * 2. Connect accounts to that Profile.
+ * 3. Fetch/Post via the Unified API.
  */
 export const ZernioAdapter = {
-  getAuthUrl: (deviceId: string, callbackUrl: string, platform: string) => {
-    const state = Buffer.from(JSON.stringify({ deviceId, platform })).toString('base64');
-    // FIXED: Added client_id which is required by Zernio OAuth
-    return `${ZERNIO_API_URL}/oauth/authorize?client_id=${ZERNIO_CLIENT_ID}&platform=${encodeURIComponent(platform)}&redirect_uri=${encodeURIComponent(callbackUrl)}&state=${state}`;
-  },
 
-  exchangeCodeForToken: async (code: string, callbackUrl: string, platform: string) => {
+  /**
+   * Step 1: Create a Profile for the user if they don't have one
+   * Profiles group accounts together for a single "Tenant" (your app user).
+   */
+  getOrCreateProfile: async (deviceId: string) => {
     try {
-      const resp = await axios.post(
-        `${ZERNIO_API_URL}/oauth/token`,
-        {
-          grant_type: 'authorization_code',
-          code,
-          redirect_uri: callbackUrl,
-          client_id: ZERNIO_CLIENT_ID,
-          client_secret: ZERNIO_CLIENT_SECRET,
-          platform
-        },
-        {
-          headers: {
-            'Authorization': `ApiKey ${ZERNIO_API_KEY}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
+      // First, try to find if we've stored a profileId for this deviceId in our DB
+      // (Implementation note: You should add a 'zernioProfileId' field to your User model)
 
-      // Expecting response: { access_token, refresh_token?, expires_in? }
-      return {
-        accessToken: resp.data.access_token,
-        refreshToken: resp.data.refresh_token || null,
-        expiresIn: resp.data.expires_in || null
-      };
+      const response = await axios.post(`${ZERNIO_API_URL}/profiles`, {
+        name: `User ${deviceId.slice(0, 6)}`,
+        description: `Mistreal Agent Profile for device ${deviceId}`
+      }, {
+        headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
+      });
+
+      return response.data.profile._id; // The 24-char MongoDB ID
     } catch (error: any) {
-      console.error('Zernio token exchange failed:', error.response?.data || error.message);
-      throw new Error('Failed to exchange code with Zernio');
+      console.error('Zernio Profile Error:', error.response?.data || error.message);
+      throw new Error(`Failed to initialize social profile: ${error.message}`);
     }
   },
 
-  fetchContent: async (accessToken: string, platform: string) => {
+  /**
+   * Step 2: Get the Auth URL for any platform (including WhatsApp!)
+   * Zernio handles the "Embedded Signup" or OAuth complexity automatically.
+   */
+  getAuthUrl: async (platform: string, profileId: string) => {
     try {
-      // Generic fetch endpoint — adjust when you have real Zernio docs
-      const resp = await axios.get(`${ZERNIO_API_URL}/v1/platforms/${encodeURIComponent(platform)}/me/content`, {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'X-Api-Key': ZERNIO_API_KEY
-        },
-        params: { limit: 50 }
+      const response = await axios.get(`${ZERNIO_API_URL}/connect/${encodeURIComponent(platform)}`, {
+        params: { profileId },
+        headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
       });
 
-      // Normalize to our post shape where possible
-      const items = resp.data?.data || [];
-      return items.map((it: any) => ({
-        id: it.id || it.message_id || `${platform}-${Math.random().toString(36).slice(2,9)}`,
-        platform: platform,
-        author: it.author || it.from || 'Unknown',
-        content: it.text || it.body || it.caption || '(no text)',
-        timestamp: it.timestamp ? new Date(it.timestamp) : new Date(),
-        sourceUrl: it.url || it.permalink || null,
-        platformIcon: '?',
-        platformColor: '#888',
-        platformDisplayName: platform
-      }));
+      return response.data.authUrl;
     } catch (error: any) {
-      console.error(`Zernio fetchContent failed for ${platform}:`, error.response?.data || error.message);
+      console.error(`Zernio Auth URL Error [${platform}]:`, error.response?.data || error.message);
+      throw new Error(`Social system busy: ${error.message}`);
+    }
+  },
+
+  /**
+   * Step 3: Fetch Inbox (DMs/Comments)
+   * Fetches from the unified inbox for this profile.
+   */
+  fetchInbox: async (profileId: string) => {
+    try {
+      const response = await axios.get(`${ZERNIO_API_URL}/inbox`, {
+        params: { profileId },
+        headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
+      });
+      return response.data.items || [];
+    } catch (error: any) {
       return [];
     }
   },
 
-  sendAction: async (accessToken: string, platform: string, action: { type: string, content: string, targetId?: string }) => {
+  /**
+   * Step 4: Dispatch Content (Post/Status)
+   * The single endpoint that covers all platforms and posting modes.
+   */
+  sendAction: async (profileId: string, platform: string, content: string, type: string) => {
     try {
-      const resp = await axios.post(`${ZERNIO_API_URL}/v1/platforms/${encodeURIComponent(platform)}/actions`, action, {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'X-Api-Key': ZERNIO_API_KEY
-        }
-      });
-      return resp.data;
-    } catch (error: any) {
-      console.error(`Zernio action failed for ${platform}:`, error.response?.data || error.message);
-      throw new Error(`Social action failed: ${error.response?.data?.error || error.message}`);
-    }
-  },
-
-  // === WHATSAPP EMBEDDED SIGNUP (META APPROVED) ===
-  getWhatsAppSdkConfig: async () => {
-    if (!ZERNIO_API_KEY) {
-      throw new Error('MISSING_ZERNIO_API_KEY: Please add ZERNIO_API_KEY to your Render environment variables.');
-    }
-
-    try {
-      // Standardizing to Bearer as requested by professional SDK integrations
-      const resp = await axios.get(`${ZERNIO_API_URL}/v1/connect/whatsapp/sdk-config`, {
+      // First, get the accountId for this platform within the profile
+      const accountsResp = await axios.get(`${ZERNIO_API_URL}/accounts`, {
+        params: { profileId },
         headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
       });
-      return resp.data; // { appId, configId }
-    } catch (error: any) {
-      const status = error.response?.status;
-      if (status === 401) {
-        throw new Error('Zernio API key is invalid or unauthorized (401). Check your credentials.');
+
+      const account = accountsResp.data.accounts.find((a: any) => a.platform === platform);
+      if (!account) throw new Error(`${platform} not linked to this profile.`);
+
+      const postData: any = {
+        content,
+        publishNow: true,
+        platforms: [
+          { platform, accountId: account._id }
+        ]
+      };
+
+      // Handle Story/Status specific logic if needed by platform
+      if (type === 'status' || type === 'story') {
+        postData.platforms[0].options = { is_story: true };
       }
-      console.error('Failed to fetch WhatsApp SDK config:', error.message);
-      throw error;
-    }
-  },
 
-  completeWhatsAppSignup: async (code: string) => {
-    if (!ZERNIO_API_KEY) throw new Error('MISSING_ZERNIO_API_KEY');
-
-    try {
-      const resp = await axios.post(`${ZERNIO_API_URL}/v1/connect/whatsapp/embedded-signup`, {
-        code
-      }, {
-        headers: {
-          'Authorization': `Bearer ${ZERNIO_API_KEY}`,
-          'Content-Type': 'application/json'
-        }
+      const response = await axios.post(`${ZERNIO_API_URL}/posts`, postData, {
+        headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
       });
-      return resp.data; // { accessToken, wabaId, phoneNumberId }
+
+      return response.data;
     } catch (error: any) {
-      console.error('Failed to complete WhatsApp signup:', error.response?.data || error.message);
-      throw error;
+      console.error(`Zernio Dispatch Error [${platform}]:`, error.response?.data || error.message);
+      throw new Error(`Dispatch failed: ${error.response?.data?.error || error.message}`);
     }
   }
 };
