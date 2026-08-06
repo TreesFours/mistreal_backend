@@ -10,6 +10,7 @@ import { getSocialSummary, createConnectSession, sendSocialAction } from './serv
 import { createSubscriptionSession, handleWebhook } from './services/stripeService';
 import { getNewsData } from './services/newsService';
 import { getWeatherData } from './services/weatherService';
+import { getDetailedAstroData } from './services/astroService';
 import { User, DelayedAction } from './models/userModel';
 import { SocialToken } from './models/SocialToken';
 import { sequelize } from './db';
