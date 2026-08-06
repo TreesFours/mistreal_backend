@@ -1,35 +1,48 @@
 import axios from 'axios';
-
-const NEWS_API_URL = 'https://newsapi.org/v2/top-headlines';
+import { getAstroData, getWikipediaDeepDive, getSportsData, getMovieIntelligence, getNovelIntelligence } from './intelligenceService';
+import { getDetailedAstroData } from './astroService';
 
 export const getNewsData = async (category: string = 'general', country: string = 'us') => {
-    const apiKey = process.env.NEWSAPI_KEY || process.env.NEWS_API_KEY;
-
-    if (!apiKey) {
-        console.warn('NEWS_API_KEY is not set. Returning empty news.');
-        return { articles: [] };
-    }
+    const apiKey = process.env.NEWS_API_KEY;
 
     try {
-        const response = await axios.get(NEWS_API_URL, {
-            params: {
-                category,
-                country: country.length === 2 ? country : 'us', // Ensure 2-char code
-                apiKey
-            }
-        });
+        const [newsResp, nasaAstro, detailedAstro, wiki, sports, movies, novels] = await Promise.all([
+            apiKey ? axios.get(`https://newsapi.org/v2/top-headlines`, { params: { category, country, apiKey } }) : Promise.resolve({ data: { articles: [] } }),
+            getAstroData(),
+            getDetailedAstroData(),
+            getWikipediaDeepDive(),
+            getSportsData(),
+            getMovieIntelligence(),
+            getNovelIntelligence()
+        ]);
 
-        // ... rest of the code ...
+        const newsArticles = newsResp.data.articles.slice(0, 5).map((a: any) => ({
+            title: a.title,
+            description: a.description,
+            url: a.url,
+            source: 'News',
+            timestamp: a.publishedAt || new Date().toISOString()
+        }));
 
-        return {
-            articles: response.data.articles.map((article: any) => ({
-                title: article.title,
-                description: article.description,
-                url: article.url
-            }))
-        };
-    } catch (error: any) {
-        console.error('News Service Error:', error.response?.data || error.message);
+        // Combine all intelligence signals
+        const allSignals = [
+            ...newsArticles,
+            ...nasaAstro,
+            ...detailedAstro,
+            ...wiki,
+            ...sports,
+            ...movies,
+            ...novels
+        ];
+
+        // 🕒 TIME-ORDERED INTERLEAVING
+        // Sort by timestamp descending so latest news/socials appear first
+        const sortedSignals = allSignals.sort((a: any, b: any) =>
+            new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+        );
+
+        return { articles: sortedSignals };
+    } catch (error) {
         return { articles: [] };
     }
 };

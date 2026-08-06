@@ -17,7 +17,7 @@ import { verifyPurchase } from './services/googlePlayService';
 import socialRoutes from './routes/socialRoutes';
 import webhookRoutes from './routes/webhookRoutes';
 import userRoutes from './routes/userRoutes';
-import { UnifiedSocialService } from './services/socialPlatforms/unified';
+import { validate, chatSchema, socialActionSchema, userSettingsSchema } from './middleware/validationMiddleware';
 
 dotenv.config();
 
@@ -67,11 +67,9 @@ app.get('/', (req, res) => res.send('🚀 Mistreal Backend Running'));
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date() }));
 
 // 🧠 AI Chat
-app.post('/api/chat', upload.fields([{ name: 'images', maxCount: 5 }, { name: 'audio', maxCount: 1 }]), async (req, res) => {
+app.post('/api/chat', upload.fields([{ name: 'images', maxCount: 5 }, { name: 'audio', maxCount: 1 }]), validate(chatSchema), async (req, res) => {
     let { prompt, provider, history, deviceId, contextMetadata } = req.body;
     const files = req.files as { images?: Express.Multer.File[], audio?: Express.Multer.File[] };
-
-    if (!deviceId) return res.status(400).json({ success: false, error: 'deviceId is required' });
 
     if (typeof history === 'string') {
         try { history = JSON.parse(history); } catch (e) { history = []; }

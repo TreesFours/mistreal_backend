@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { User } from '../models/userModel';
+import { validate, userSettingsSchema } from '../middleware/validationMiddleware';
 
 const router = Router();
 
@@ -23,10 +24,8 @@ const getOrCreateUser = async (deviceId: string) => {
 };
 
 // ⚙️ Update User Settings
-router.post('/settings', async (req: Request, res: Response) => {
+router.post('/settings', validate(userSettingsSchema), async (req: Request, res: Response) => {
     const { deviceId, userName, aiPersona, autoReplyDelay, guardianEnabled, emergencyContacts } = req.body;
-
-    if (!deviceId) return res.status(400).json({ success: false, error: 'deviceId is required' });
 
     try {
         const user = await getOrCreateUser(deviceId);

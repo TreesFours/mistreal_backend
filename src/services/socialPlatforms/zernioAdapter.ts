@@ -30,8 +30,15 @@ export const ZernioAdapter = {
 
       return response.data.profile._id; // The 24-char MongoDB ID
     } catch (error: any) {
-      console.error('Zernio Profile Error:', error.response?.data || error.message);
-      throw new Error(`Failed to initialize social profile: ${error.message}`);
+      const status = error.response?.status;
+      const data = error.response?.data;
+
+      if (status === 402) {
+        throw new Error('ZERNIO_PAYMENT_REQUIRED: Your Zernio account has reached its free profile limit or needs a valid payment method.');
+      }
+
+      console.error('Zernio Profile Error:', data || error.message);
+      throw new Error(`Failed to initialize social profile: ${data?.error || error.message}`);
     }
   },
 
@@ -48,8 +55,15 @@ export const ZernioAdapter = {
 
       return response.data.authUrl;
     } catch (error: any) {
-      console.error(`Zernio Auth URL Error [${platform}]:`, error.response?.data || error.message);
-      throw new Error(`Social system busy: ${error.message}`);
+      const status = error.response?.status;
+      const data = error.response?.data;
+
+      if (status === 402) {
+        throw new Error('ZERNIO_PAYMENT_REQUIRED: Connecting this account requires an active Zernio subscription.');
+      }
+
+      console.error(`Zernio Auth URL Error [${platform}]:`, data || error.message);
+      throw new Error(`Social system error (${status}): ${data?.error || error.message}`);
     }
   },
 

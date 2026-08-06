@@ -31,8 +31,11 @@ let lastFetchTime = 0;
 const CACHE_TTL = 1800000; // 30 minutes
 
 export const getLiveGeminiModels = async () => {
-    const geminiKey = process.env.GEMINI_API_KEY || process.env.GEMINI_API;
-    if (!geminiKey) return [];
+    const geminiKey = process.env.GEMINI_API_KEY;
+    if (!geminiKey) {
+        logger.error("❌ GEMINI_API_KEY is missing in environment.");
+        return [];
+    }
 
     const now = Date.now();
     if (cachedGeminiModels.length > 0 && (now - lastFetchTime < CACHE_TTL)) {
@@ -152,7 +155,7 @@ export const getAvailableModels = async (isPro: boolean) => {
  * 🛡️ UNIVERSAL AI EXECUTION (With Smart Failover)
  */
 export const getAiResponse = async (prompt: string, provider: string, history: any[], user?: any, imageDatas?: string[], audioData?: string): Promise<AiResponse> => {
-    const geminiKey = process.env.GEMINI_API_KEY || process.env.GEMINI_API;
+    const geminiKey = process.env.GEMINI_API_KEY;
     const openRouterKey = process.env.OPENROUTER_API_KEY;
 
     let activeProvider = provider;

@@ -3,6 +3,8 @@ import { UnifiedSocialService } from '../services/socialPlatforms/unified';
 import { createConnectSession, getAvailablePlatforms, sendSocialAction } from '../services/socialService';
 import { User } from '../models/userModel';
 
+import { validate, socialActionSchema } from '../middleware/validationMiddleware';
+
 const router = Router();
 
 // 🛡️ Internal Helper
@@ -97,10 +99,9 @@ router.get('/callback', async (req: Request, res: Response) => {
   }
 });
 
-router.post('/action', async (req: Request, res: Response) => {
+router.post('/action', validate(socialActionSchema), async (req: Request, res: Response) => {
   try {
     const { deviceId, platform, type, content, targetId } = req.body;
-    if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
     const user = await User.findOne({ where: { deviceId } });
     if (!user) return res.status(404).json({ error: 'User not found' });
 
