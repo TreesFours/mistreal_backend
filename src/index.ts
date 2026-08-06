@@ -141,8 +141,8 @@ app.get('/api/weather', async (req, res) => {
             const moonMatch = description.match(/Moon phase data captured for (.*)\./);
             const planetMatch = description.match(/Notable planetary positions relative to Earth: (.*)\./);
 
-            weather.moonPhase = moonMatch ? "Visible" : "Unknown";
-            weather.planets = planetMatch ? planetMatch[1] : "N/A";
+            weather.moonPhase = moonMatch ? "Retrieved" : "Updating...";
+            weather.planets = planetMatch ? planetMatch[1] : "Calculating...";
         }
     } catch (e) {}
 

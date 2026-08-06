@@ -184,19 +184,23 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
 
         for (const targetModel of modelsToTry) {
             try {
-                logger.info(`🤖 Intelligence Routing: Attempting ${targetModel}`);
+                // 🛡️ CRITICAL FIX: Ensure no double-prefixing or invalid "google/" strings
+                const cleanModelName = targetModel.replace('models/', '').replace('google/', '').trim();
 
-        const contents = history.map((m: any) => ({
-            role: m.role === 'assistant' || m.role === 'model' ? 'model' : 'user',
-            parts: [{ text: m.content }]
-        }));
+                logger.info(`🤖 Intelligence Routing: Attempting ${cleanModelName}`);
+
+                const contents = history.map((m: any) => ({
+                    role: m.role === 'assistant' || m.role === 'model' ? 'model' : 'user',
+                    parts: [{ text: m.content }]
+                }));
 
                 const currentParts: any[] = [{ text: prompt }];
                 if (imageDatas) imageDatas.forEach(d => currentParts.push({ inline_data: { mime_type: "image/jpeg", data: d } }));
                 if (audioData) currentParts.push({ inline_data: { mime_type: "audio/mp3", data: audioData } });
                 contents.push({ role: 'user', parts: currentParts });
 
-                const url = `${GOOGLE_AI_BASE_URL}/models/${targetModel}:generateContent?key=${geminiKey}`;
+                const url = `${GOOGLE_AI_BASE_URL}/models/${cleanModelName}:generateContent?key=${geminiKey}`;
+                logger.debug(`📡 Full AI Request URL: ${url.replace(geminiKey, "REDACTED")}`);
 
                 const response = await axios.post(url, {
                     contents,
