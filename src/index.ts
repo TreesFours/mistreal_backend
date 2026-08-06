@@ -164,6 +164,15 @@ app.post('/api/payment/verify', async (req, res) => {
     } catch (error: any) { res.status(500).json({ success: false, error: error.message }); }
 });
 
+// ⚙️ App Config
+app.get('/api/config', async (req, res) => {
+    res.json({
+        proPrice: "$9.99/mo",
+        productId: "pro_monthly_subscription",
+        freeTrialDays: "7"
+    });
+});
+
 // ⏳ Background Worker
 setInterval(async () => {
     if (!DATABASE_URL) return;

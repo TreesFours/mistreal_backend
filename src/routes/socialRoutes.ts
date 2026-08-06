@@ -129,6 +129,72 @@ router.post('/sync', async (req: Request, res: Response) => {
   }
 });
 
+// Added GET support for sync to match Android app
+router.get('/sync', async (req: Request, res: Response) => {
+  try {
+    const { deviceId } = req.query;
+    if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
+    const user = await User.findOne({ where: { deviceId: String(deviceId) } });
+
+    if (!user) {
+        return res.status(200).json({ summary: "USER_NOT_FOUND", posts: [], platformUpdates: [] });
+    }
+
+    const result = await UnifiedSocialService.syncAllPlatforms(user);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/contacts', async (req: Request, res: Response) => {
+  try {
+    const { deviceId, platform } = req.query;
+    // Implementation of contacts fetch from Zernio would go here
+    // For now, return empty list to avoid 404
+    res.json({ success: true, contacts: [] });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/unread', async (req: Request, res: Response) => {
+  try {
+    const { deviceId } = req.query;
+    if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
+
+    const user = await User.findOne({ where: { deviceId: String(deviceId) } });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    // Retrieve unread items from preferences.unreadMetadata populated by WebhookService
+    const unreadMetadata = user.preferences?.unreadMetadata || {};
+    const unreadItems: any[] = [];
+
+    Object.keys(unreadMetadata).forEach(platform => {
+        if (Array.isArray(unreadMetadata[platform])) {
+            unreadMetadata[platform].forEach((item: any) => {
+                unreadItems.push({
+                    id: item.id,
+                    sender: item.sender,
+                    platform: platform,
+                    text: item.content || item.type,
+                    timestamp: item.timestamp,
+                    isOnline: false, // Defaulting to false as real-time online status requires separate tracking
+                    lastSeen: null
+                });
+            });
+        }
+    });
+
+    // Sort by timestamp newest first
+    unreadItems.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+    res.json({ success: true, unreadItems });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.post('/disconnect/:platform', async (req: Request, res: Response) => {
   try {
     const { deviceId } = req.body;

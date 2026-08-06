@@ -1,5 +1,6 @@
 // backend/src/services/webhookService.ts
 import crypto from 'crypto';
+import { Op } from 'sequelize';
 import logger from '../utils/logger';
 import { User, sequelize } from '../models/userModel';
 
@@ -31,7 +32,7 @@ export class WebhookService {
      * Ensures database integrity using Transactions.
      */
     static async handleEvent(event: any) {
-        const { type, data, platform, user_token } = event;
+        const { type, data, platform, user_token, profile_id } = event;
 
         logger.info(`📨 [ZERNIO] Processing ${type} on ${platform}`);
 
@@ -39,8 +40,14 @@ export class WebhookService {
         const transaction = await sequelize.transaction();
 
         try {
+            // Find user by profile_id (new flow) or user_token (legacy flow)
             const user = await User.findOne({
-                where: { zernioUserToken: user_token },
+                where: {
+                    [Op.or]: [
+                        { zernioProfileId: profile_id || null },
+                        { zernioUserToken: user_token || null }
+                    ]
+                },
                 transaction
             });
 

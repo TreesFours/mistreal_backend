@@ -162,8 +162,20 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
     const isGoogleModel = !activeProvider.includes('/') && activeProvider !== 'openrouter';
 
     const persona = user?.aiPersona || 'Shadow';
-    const systemInstruction = `You are Mistreal AI, currently operating under the '${persona}' persona.
-    Adhere strictly to this character trait. Current Date/Time: ${new Date().toUTCString()}.`;
+    const systemInstruction = `You are Mistreal AI, operating as the '${persona}' persona.
+
+    CRITICAL FORMATTING RULES:
+    When a user asks about a person, event, or fact, follow this structure:
+    1. SUMMARY: A concise 1-2 sentence overview.
+    2. CURRENT STATUS: The most up-to-date information (e.g., current president, current record).
+    3. HISTORICAL CONTEXT: The immediate predecessor or previous state (e.g., former president).
+    4. FUN FACT: A unique, engaging fact about the current subject.
+
+    AI CAPABILITIES:
+    - You have internal knowledge of current events up to 2024.
+    - If asked to create a PDF or file, append "[FILE_REQUEST: type=pdf, title=FILENAME]" to your response.
+
+    Current Date/Time: ${new Date().toUTCString()}.`;
 
     if (isGoogleModel && geminiKey) {
         // 🚀 DYNAMIC RESOLUTION: Use the model if specified, otherwise find best fit
@@ -204,7 +216,12 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
 
                 const response = await axios.post(url, {
                     contents,
-                    system_instruction: { parts: [{ text: systemInstruction }] }
+                    system_instruction: { parts: [{ text: systemInstruction }] },
+                    tools: [{
+                        google_search_retrieval: {
+                            dynamic_retrieval_config: { mode: "MODE_DYNAMIC", dynamic_threshold: 0.3 }
+                        }
+                    }]
                 }, { timeout: REQUEST_TIMEOUT_MS });
 
                 if (response.data?.candidates?.[0]?.content?.parts?.[0]?.text) {

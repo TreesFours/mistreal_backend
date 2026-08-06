@@ -47,14 +47,20 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
             return acc;
         }, []);
 
-        const posts = filteredItems.map((it: any) => ({
-            id: it._id,
-            platform: it.platform,
-            author: it.author?.name || 'Social Contact',
-            content: it.content?.text || it.content?.body || '',
-            timestamp: it.createdAt,
-            sourceUrl: null
-        }));
+        const posts = filteredItems.map((it: any) => {
+            const def = getPlatformDefinition(it.platform);
+            return {
+                id: it._id,
+                platform: it.platform,
+                author: it.author?.name || 'Social Contact',
+                content: it.content?.text || it.content?.body || '',
+                timestamp: it.createdAt,
+                sourceUrl: it.source_url || null,
+                platformIcon: def?.icon || '🔗',
+                platformColor: def?.color || '#888',
+                platformDisplayName: def?.displayName || it.platform
+            };
+        });
 
         return {
             summary: items.length > 0 ? `Unified Intelligence: ${items.length} new signals.` : 'Your intelligence feeds are silent.',
@@ -82,8 +88,20 @@ export const createConnectSession = async (platform: string, deviceId: string) =
             await user.save();
         }
 
-        // 2. Get the redirect URL
-        return await ZernioAdapter.getAuthUrl(platform, user.zernioProfileId!);
+        // 2. Resolve Scope: Handle platform-specific User/Bot mode ambiguity
+        // Discord is the primary one where users often get 'Bot Invite' by mistake.
+        // For others like Instagram/Twitter, Zernio's defaults are optimized for User data.
+        const platformScopes: Record<string, string> = {
+            'discord': 'identify guilds', // Switches to 'User OAuth' mode
+            'twitter': 'tweet.read users.read offline.access',
+            'instagram': 'instagram_basic instagram_manage_messages',
+            'facebook': 'pages_show_list pages_messaging',
+        };
+
+        const scope = platformScopes[platform.toLowerCase()];
+
+        // 3. Get the redirect URL
+        return await ZernioAdapter.getAuthUrl(platform, user.zernioProfileId!, scope);
     } catch (error: any) {
         throw new Error(`Social connection failed: ${error.message}`);
     }
