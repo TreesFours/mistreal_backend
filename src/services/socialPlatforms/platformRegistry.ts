@@ -46,7 +46,7 @@ const PLATFORM_DEFINITIONS: Record<string, SocialPlatformDefinition> = {
     displayName: 'Discord',
     icon: '👾',
     color: '#5865F2',
-    isProOnly: true
+    isProOnly: false // Move to free for testing
   },
   telegram: {
     id: 'telegram',
@@ -67,7 +67,7 @@ const PLATFORM_DEFINITIONS: Record<string, SocialPlatformDefinition> = {
     displayName: 'LinkedIn',
     icon: 'in',
     color: '#0A66C2',
-    isProOnly: true
+    isProOnly: false // Move to free for testing
   }
 };
 

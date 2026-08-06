@@ -129,7 +129,22 @@ app.post('/api/subscribe', async (req: any, res: any) => {
 // 🌦️ Intelligence Feed
 app.get('/api/weather', async (req, res) => {
     const { lat, lon } = req.query;
-    const weather = await getWeatherData(Number(lat), Number(lon));
+    const weather: any = await getWeatherData(Number(lat), Number(lon));
+
+    // Add Astro Summary to weather response for the top card
+    try {
+        const astroData = await getDetailedAstroData();
+        if (astroData.length > 0) {
+            const description = astroData[0].description;
+            // Extract moon phase and planets from description string
+            const moonMatch = description.match(/Moon phase data captured for (.*)\./);
+            const planetMatch = description.match(/Notable planetary positions relative to Earth: (.*)\./);
+
+            weather.moonPhase = moonMatch ? "Visible" : "Unknown";
+            weather.planets = planetMatch ? planetMatch[1] : "N/A";
+        }
+    } catch (e) {}
+
     res.json(weather);
 });
 

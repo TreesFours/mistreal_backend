@@ -166,15 +166,17 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
     Adhere strictly to this character trait. Current Date/Time: ${new Date().toUTCString()}.`;
 
     if (isGoogleModel && geminiKey) {
-        // 🚀 DISCOVERY FAILOVER: Try the requested model, then failover to best ranked
+        // 🚀 DYNAMIC RESOLUTION: Use the model if specified, otherwise find best fit
+        let targetModel = activeProvider === 'dynamic' ? "" : activeProvider;
+
         const rankedCandidates = await getRankedGeminiModels(user?.isPro);
 
-        // Build sequence: [User's specific choice (if not 'dynamic'), Top Candidate, Second Candidate, Third Candidate]
-        const modelsToTry: string[] = [];
-        if (activeProvider !== 'dynamic' && !activeProvider.includes('google')) {
-            modelsToTry.push(activeProvider);
+        if (!targetModel || targetModel === 'dynamic') {
+            targetModel = rankedCandidates[0] || "gemini-1.5-flash";
         }
-        rankedCandidates.slice(0, 3).forEach(m => {
+
+        const modelsToTry: string[] = [targetModel];
+        rankedCandidates.slice(0, 2).forEach(m => {
             if (!modelsToTry.includes(m)) modelsToTry.push(m);
         });
 
