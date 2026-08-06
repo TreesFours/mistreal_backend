@@ -186,10 +186,10 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
             try {
                 logger.info(`🤖 Intelligence Routing: Attempting ${targetModel}`);
 
-                const contents = history.map((m: any) => ({
-                    role: m.role === 'assistant' ? 'model' : 'user',
-                    parts: [{ text: m.content }]
-                }));
+        const contents = history.map((m: any) => ({
+            role: m.role === 'assistant' || m.role === 'model' ? 'model' : 'user',
+            parts: [{ text: m.content }]
+        }));
 
                 const currentParts: any[] = [{ text: prompt }];
                 if (imageDatas) imageDatas.forEach(d => currentParts.push({ inline_data: { mime_type: "image/jpeg", data: d } }));
