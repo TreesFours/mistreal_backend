@@ -245,6 +245,10 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
                 }
 
                 continue;
+            } catch (error: any) {
+                lastError = error.message;
+                logger.error(`❌ Gemini Network/Axios Error: ${lastError}`);
+                continue;
             }
         }
 
