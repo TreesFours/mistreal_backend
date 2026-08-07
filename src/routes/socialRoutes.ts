@@ -18,16 +18,27 @@ const getOrCreateUser = async (deviceId: string) => {
     } catch (e) { return null; }
 };
 
-// 📱 Get Available Platforms
+// 📱 Get Available Platforms (Now includes connection status)
 router.get('/platforms', async (req: Request, res: Response) => {
     const { deviceId } = req.query;
     let isPro = false;
+    let connectedPlatforms: string[] = [];
+
     if (deviceId) {
         const user = await getOrCreateUser(String(deviceId));
         isPro = user?.isPro ?? false;
+        connectedPlatforms = user?.connectedPlatforms || [];
     }
+
     const platforms = await getAvailablePlatforms(isPro);
-    res.json(platforms);
+
+    // Merge connection status
+    const result = platforms.map(p => ({
+        ...p,
+        isConnected: connectedPlatforms.includes(p.id)
+    }));
+
+    res.json(result);
 });
 
 // === PROFESSIONAL DIRECT OAUTH ROUTES ===
@@ -89,10 +100,35 @@ router.get('/callback', async (req: Request, res: Response) => {
 
     await user.save();
 
-    // Redirect back to app with success
-    res.redirect(
-        `mistreal://social-connected?platform=${decodedPlatform}&success=true&deviceId=${deviceId}`
-    );
+    // 🏆 Success Response: Show a friendly HTML page before redirecting (or instead of)
+    res.send(`
+      <html>
+        <head>
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <style>
+            body { font-family: -apple-system, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #000; color: #fff; text-align: center; }
+            .card { background: #111; padding: 2rem; border-radius: 20px; border: 1px solid #333; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+            h1 { color: #81C784; margin-bottom: 0.5rem; }
+            p { opacity: 0.8; margin-bottom: 2rem; }
+            .btn { background: #81C784; color: #000; padding: 12px 24px; border-radius: 12px; text-decoration: none; font-weight: bold; }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <h1>Linked Successfully!</h1>
+            <p>Mistreal AI is now connected to your ${decodedPlatform} account.</p>
+            <p><b>Please close this browser window and return to the app.</b></p>
+            <a href="mistreal://social-connected?platform=${decodedPlatform}&success=true&deviceId=${deviceId}" class="btn">Return to App</a>
+          </div>
+          <script>
+            // Attempt auto-redirect after 3 seconds
+            setTimeout(() => {
+              window.location.href = "mistreal://social-connected?platform=${decodedPlatform}&success=true&deviceId=${deviceId}";
+            }, 3000);
+          </script>
+        </body>
+      </html>
+    `);
   } catch (error: any) {
     console.error('Callback handler error:', error.message);
     res.redirect(`mistreal://social-connected?success=false&error=${error.message}`);

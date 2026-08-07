@@ -89,24 +89,29 @@ const rankModelStability = (model: any): number => {
 export const getRankedGeminiModels = async (isPro: boolean = false): Promise<string[]> => {
     const liveModels = await getLiveGeminiModels();
 
+    // 🛡️ HARD-CODED STABLE FALLBACKS (If discovery fails)
+    const defaults = isPro
+        ? ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-1.0-pro"]
+        : ["gemini-1.5-flash", "gemini-1.5-flash-8b", "gemini-1.0-pro"];
+
     if (liveModels.length === 0) {
-        return ["gemini-1.5-flash-latest"];
+        return defaults;
     }
 
     const sorted = [...liveModels].sort((a, b) => rankModelStability(b) - rankModelStability(a));
     const cleanName = (model: any) => model.name.replace('models/', '');
 
+    let candidates: string[] = [];
+
     if (isPro) {
-        // High-Intelligence models for Pro
-        const proModels = sorted.filter(m => m.name.toLowerCase().includes('pro')).map(cleanName);
-        if (proModels.length > 0) return proModels;
+        candidates = sorted.filter(m => m.name.toLowerCase().includes('pro')).map(cleanName);
+    } else {
+        candidates = sorted.filter(m => m.name.toLowerCase().includes('flash')).map(cleanName);
     }
 
-    // High-Quota/Speed models for Free
-    const flashModels = sorted.filter(m => m.name.toLowerCase().includes('flash')).map(cleanName);
-    if (flashModels.length > 0) return flashModels;
-
-    return sorted.map(cleanName);
+    // Merge with defaults to ensure we always have valid IDs
+    const finalModels = Array.from(new Set([...candidates, ...defaults]));
+    return finalModels;
 };
 
 export const getAvailableModels = async (isPro: boolean) => {
@@ -255,7 +260,8 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
         // 🚨 ULTIMATE EMERGENCY PIVOT: If all Google candidates fail, try OpenRouter as a bridge.
         if (openRouterKey) {
             logger.error(`🚨 Global Google failure. Pivoting to OpenRouter bridge...`);
-            // Corrected OpenRouter model ID for Gemini 1.5 Flash
+            // Corrected OpenRouter model ID for Gemini 1.5 Flash (Use most stable ID)
+            // Try flash first, if it fails, the OpenRouter block below will catch and report.
             return await getAiResponse(prompt, 'google/gemini-flash-1.5', history, user, imageDatas, audioData);
         }
 
@@ -267,49 +273,59 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
         };
     }
 
-    // --- OpenRouter Standard Execution ---
+    // --- OpenRouter Standard Execution (With Failover) ---
     if (!openRouterKey) return { content: '', provider: activeProvider, success: false, error: "AI Key missing." };
 
-    try {
-        const response = await axios.post(OPENROUTER_API_URL, {
-            model: activeProvider === 'dynamic' ? 'google/gemini-flash-1.5' : activeProvider,
-            messages: [
-                { role: 'system', content: systemInstruction },
-                ...history.map((m: any) => ({ role: m.role, content: m.content })),
-                { role: 'user', content: prompt }
-            ]
-        }, {
-            headers: {
-                'Authorization': `Bearer ${openRouterKey}`,
-                'HTTP-Referer': 'https://mistreal-assistant.com',
-                'X-Title': 'Mistreal Assistant'
-            },
-            timeout: REQUEST_TIMEOUT_MS
-        });
+    const orModels = [
+        activeProvider === 'dynamic' || activeProvider.includes('gemini-flash-1.5') ? 'google/gemini-flash-1.5' : activeProvider,
+        'google/gemini-flash-1.5-8b',
+        'anthropic/claude-3-haiku',
+        'meta-llama/llama-3-8b-instruct:free'
+    ];
 
-        if (response.data?.choices?.[0]?.message?.content) {
-            return {
-                content: response.data.choices[0].message.content,
-                provider: activeProvider,
-                success: true
-            };
+    let orLastError = "";
+
+    for (const modelId of orModels) {
+        try {
+            const response = await axios.post(OPENROUTER_API_URL, {
+                model: modelId,
+                messages: [
+                    { role: 'system', content: systemInstruction },
+                    ...history.map((m: any) => ({ role: m.role, content: m.content })),
+                    { role: 'user', content: prompt }
+                ]
+            }, {
+                headers: {
+                    'Authorization': `Bearer ${openRouterKey}`,
+                    'HTTP-Referer': 'https://mistreal-assistant.com',
+                    'X-Title': 'Mistreal Assistant'
+                },
+                timeout: REQUEST_TIMEOUT_MS,
+                validateStatus: (status) => status < 500 // Fail on 5xx, but catch 404/429
+            });
+
+            if (response.status === 200 && response.data?.choices?.[0]?.message?.content) {
+                return {
+                    content: response.data.choices[0].message.content,
+                    provider: `openrouter/${modelId}`,
+                    success: true
+                };
+            }
+
+            orLastError = response.data?.error?.message || `HTTP ${response.status}`;
+            logger.warn(`⚠️ OpenRouter Model ${modelId} failed: ${orLastError}`);
+            continue;
+        } catch (error: any) {
+            orLastError = error.message;
+            logger.error(`❌ OpenRouter Connection Error [${modelId}]: ${orLastError}`);
+            continue;
         }
-
-        // Detailed error reporting for OpenRouter
-        const orError = response.data?.error?.message || "OpenRouter returned an empty choices array.";
-        throw new Error(orError);
-    } catch (error: any) {
-        const status = error.response?.status;
-        const data = error.response?.data;
-        const detail = data?.error?.message || error.message;
-
-        logger.error(`❌ OpenRouter Execution Failed [Status: ${status}]: ${detail}`);
-
-        return {
-            content: '',
-            provider: activeProvider,
-            success: false,
-            error: `PROVIDER_ERROR: ${detail} (Code: ${status || 'UNK'})`
-        };
     }
+
+    return {
+        content: '',
+        provider: activeProvider,
+        success: false,
+        error: `PROVIDER_ERROR: ${orLastError} (Checked ${orModels.length} models)`
+    };
 };
