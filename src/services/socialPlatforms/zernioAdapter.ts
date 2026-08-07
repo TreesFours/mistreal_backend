@@ -49,7 +49,11 @@ export const ZernioAdapter = {
   getAuthUrl: async (platform: string, profileId: string, scope?: string) => {
     try {
       const response = await axios.get(`${ZERNIO_API_URL}/connect/${encodeURIComponent(platform)}`, {
-        params: { profileId, scope },
+        params: {
+            profileId,
+            scope,
+            headless: 'true' // Trigger direct platform OAuth flow
+        },
         headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
       });
 

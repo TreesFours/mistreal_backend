@@ -164,15 +164,15 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
     const persona = user?.aiPersona || 'Shadow';
     const systemInstruction = `You are Mistreal AI, operating as the '${persona}' persona.
 
-    CRITICAL FORMATTING RULES:
-    When a user asks about a person, event, or fact, follow this structure:
-    1. SUMMARY: A concise 1-2 sentence overview.
-    2. CURRENT STATUS: The most up-to-date information (e.g., current president, current record).
-    3. HISTORICAL CONTEXT: The immediate predecessor or previous state (e.g., former president).
-    4. FUN FACT: A unique, engaging fact about the current subject.
+    STRICT FORMATTING RULES (Apply to ALL responses):
+    Every response must follow this exact 4-part briefing structure:
+    1. SUMMARY: A concise 1-2 sentence overview of the topic.
+    2. CURRENT STATUS: The absolute most up-to-date information/answer (e.g., current president, current planetary position).
+    3. HISTORICAL CONTEXT: The immediate predecessor, past record, or background (e.g., who was there before, how it used to be).
+    4. FUN FACT: A unique, engaging fact about the subject.
 
     AI CAPABILITIES:
-    - You have internal knowledge of current events up to 2024.
+    - You have internal knowledge up to 2024 and Real-Time Google Search access.
     - If asked to create a PDF or file, append "[FILE_REQUEST: type=pdf, title=FILENAME]" to your response.
 
     Current Date/Time: ${new Date().toUTCString()}.`;
@@ -212,7 +212,7 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
                 contents.push({ role: 'user', parts: currentParts });
 
                 const url = `${GOOGLE_AI_BASE_URL}/models/${cleanModelName}:generateContent?key=${geminiKey}`;
-                logger.debug(`📡 Full AI Request URL: ${url.replace(geminiKey, "REDACTED")}`);
+                logger.info(`📡 AI Direct Execution: ${cleanModelName}`);
 
                 const response = await axios.post(url, {
                     contents,
@@ -222,29 +222,28 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
                             dynamic_retrieval_config: { mode: "MODE_DYNAMIC", dynamic_threshold: 0.3 }
                         }
                     }]
-                }, { timeout: REQUEST_TIMEOUT_MS });
+                }, {
+                    timeout: REQUEST_TIMEOUT_MS,
+                    validateStatus: () => true // Catch all statuses to log full details
+                });
 
-                if (response.data?.candidates?.[0]?.content?.parts?.[0]?.text) {
+                if (response.status === 200 && response.data?.candidates?.[0]?.content?.parts?.[0]?.text) {
                     return {
                         content: response.data.candidates[0].content.parts[0].text,
                         provider: targetModel,
                         success: true
                     };
                 }
-                throw new Error('Null response from candidate.');
-            } catch (error: any) {
-                const status = error.response?.status;
-                const errorMsg = error.response?.data?.error?.message || error.message;
-                lastError = errorMsg;
 
-                logger.warn(`⚠️ Routing Warning [${targetModel}] [Status: ${status}]: ${errorMsg}`);
+                // CRITICAL AUDIT: Detailed error capture for "No Endpoint" debugging
+                const remoteError = response.data?.error?.message || response.statusText;
+                lastError = `[HTTP ${response.status}] ${remoteError}`;
+                logger.error(`❌ Gemini API Failure [${cleanModelName}]: ${lastError}`);
 
-                // If it's a 429, the whole API Key is limited. Don't waste time on failover.
-                if (status === 429) {
-                    return { content: '', provider: targetModel, success: false, error: "RATE_LIMIT_REACHED" };
+                if (response.status === 404) {
+                    lastError = `ENDPOINT_NOT_FOUND: The model name '${cleanModelName}' might be incorrect for your API key region.`;
                 }
 
-                // If it's a 404, 503, or 500, try the next model in the sequence.
                 continue;
             }
         }
@@ -252,10 +251,16 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
         // 🚨 ULTIMATE EMERGENCY PIVOT: If all Google candidates fail, try OpenRouter as a bridge.
         if (openRouterKey) {
             logger.error(`🚨 Global Google failure. Pivoting to OpenRouter bridge...`);
+            // Corrected OpenRouter model ID for Gemini 1.5 Flash
             return await getAiResponse(prompt, 'google/gemini-flash-1.5', history, user, imageDatas, audioData);
         }
 
-        return { content: '', provider: 'emergency', success: false, error: `Critical Failure: All AI systems failed. Last error: ${lastError}` };
+        return {
+            content: '',
+            provider: 'emergency',
+            success: false,
+            error: `AI SYSTEMS OFFLINE. Last Internal Error: ${lastError}`
+        };
     }
 
     // --- OpenRouter Standard Execution ---
@@ -285,13 +290,22 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
                 success: true
             };
         }
-        throw new Error('OpenRouter returned an empty choices array.');
+
+        // Detailed error reporting for OpenRouter
+        const orError = response.data?.error?.message || "OpenRouter returned an empty choices array.";
+        throw new Error(orError);
     } catch (error: any) {
+        const status = error.response?.status;
+        const data = error.response?.data;
+        const detail = data?.error?.message || error.message;
+
+        logger.error(`❌ OpenRouter Execution Failed [Status: ${status}]: ${detail}`);
+
         return {
             content: '',
             provider: activeProvider,
             success: false,
-            error: error.response?.data?.error?.message || error.message
+            error: `PROVIDER_ERROR: ${detail} (Code: ${status || 'UNK'})`
         };
     }
 };

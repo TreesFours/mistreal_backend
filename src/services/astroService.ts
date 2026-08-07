@@ -53,3 +53,35 @@ export const getDetailedAstroData = async () => {
         return [];
     }
 };
+
+/**
+ * 🛰️ NASA JPL Horizons Integration
+ * Fetches exact Cartesian vectors for scale-perfect mapping
+ */
+export const getJplVectorData = async (bodyId: string) => {
+    const nasaKey = process.env.NASA_API_KEY;
+    if (!nasaKey) return null;
+
+    try {
+        // JPL Horizons API for precision tracking
+        const response = await axios.get('https://ssd.jpl.nasa.gov/api/horizons.api', {
+            params: {
+                format: 'json',
+                COMMAND: `'${bodyId}'`,
+                OBJ_DATA: 'YES',
+                MAKE_EPHEM: 'YES',
+                EPHEM_TYPE: 'VECTORS',
+                CENTER: '500@0', // Solar System Barycenter
+                START_TIME: 'now',
+                STOP_TIME: 'now + 1 minute',
+                STEP_SIZE: '1m',
+                VEC_TABLE: '2' // Position vectors only
+            }
+        });
+
+        return response.data;
+    } catch (e: any) {
+        logger.error(`❌ JPL Horizons Failure: ${e.message}`);
+        return null;
+    }
+};
