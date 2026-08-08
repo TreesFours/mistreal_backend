@@ -1,8 +1,6 @@
 import { User } from '../models/userModel';
 import { getPlatformDefinition, getAvailablePlatformDefinitions } from './socialPlatforms/platformRegistry';
-import { TwitterOAuth } from './socialPlatforms/twitterAuth';
-import { InstagramOAuth } from './socialPlatforms/instagramAuth';
-import { FacebookOAuth, LinkedInOAuth } from './socialPlatforms/socialAuthHandlers';
+import { ZernioAdapter } from './socialPlatforms/zernioAdapter';
 
 export const getAvailablePlatforms = async (isPro: boolean) => {
     return getAvailablePlatformDefinitions(isPro).map(def => ({
@@ -15,144 +13,100 @@ export const getAvailablePlatforms = async (isPro: boolean) => {
 };
 
 /**
- * 🔄 Unified Post Fetching via Direct OAuth
- * Fetches from each platform's API using stored tokens.
+ * 🔄 Refined Zernio Sync logic
  */
 export const getSocialSummary = async (user: User, isPro: boolean = false) => {
-    const connectedPlatforms = user.connectedPlatforms || [];
-    if (connectedPlatforms.length === 0) {
+    if (!user.zernioProfileId) {
         return { summary: "CONNECTION_REQUIRED", platformUpdates: [], posts: [], rawContent: "" };
     }
 
-    const allPosts: any[] = [];
-    const platformUpdates: any[] = [];
+    try {
+        const items = await ZernioAdapter.fetchInbox(user.zernioProfileId);
+        const filteredItems = isPro ? items : items.filter((i: any) =>
+            ['twitter', 'x', 'whatsapp', 'linkedin', 'discord'].includes(i.platform.toLowerCase())
+        );
 
-    // Fetch from each platform in parallel for speed
-    const fetchPromises = connectedPlatforms.map(async (platform) => {
-        let posts: any[] = [];
-        const def = getPlatformDefinition(platform);
-
-        try {
-            switch (platform.toLowerCase()) {
-                case 'twitter':
-                case 'x':
-                    if (user.twitterAccessToken) {
-                        posts = await TwitterOAuth.fetchUserPosts(user.twitterAccessToken);
-                    }
-                    break;
-                case 'instagram':
-                    if (user.instagramAccessToken) {
-                        posts = await InstagramOAuth.fetchUserPosts(user.instagramAccessToken);
-                    }
-                    break;
-                case 'facebook':
-                    if (user.facebookAccessToken) {
-                        posts = await FacebookOAuth.fetchUserPosts(user.facebookAccessToken);
-                    }
-                    break;
-                case 'linkedin':
-                    if (user.linkedinAccessToken) {
-                        posts = await LinkedInOAuth.fetchUserPosts(user.linkedinAccessToken);
-                    }
-                    break;
-            }
-
-            if (posts.length > 0) {
-                allPosts.push(...posts);
-                platformUpdates.push({
-                    platform: platform,
-                    count: posts.length,
+        const platformUpdates = filteredItems.reduce((acc: any[], item: any) => {
+            const existing = acc.find((p: any) => p.platform === item.platform);
+            if (existing) {
+                existing.count++;
+            } else {
+                const def = getPlatformDefinition(item.platform);
+                acc.push({
+                    platform: item.platform,
+                    count: 1,
                     platformIcon: def?.icon || '🔗',
                     platformColor: def?.color || '#888',
-                    platformDisplayName: def?.displayName || platform,
+                    platformDisplayName: def?.displayName || item.platform,
                     connected: true
                 });
             }
-        } catch (error) {
-            console.error(`Sync failed for ${platform}:`, error);
-        }
-    });
+            return acc;
+        }, []);
 
-    await Promise.all(fetchPromises);
+        const posts = filteredItems.map((it: any) => {
+            const def = getPlatformDefinition(it.platform);
+            return {
+                id: it._id,
+                platform: it.platform,
+                author: it.author?.name || 'Social Contact',
+                content: it.content?.text || it.content?.body || '',
+                timestamp: it.createdAt,
+                sourceUrl: it.source_url || null,
+                platformIcon: def?.icon || '🔗',
+                platformColor: def?.color || '#888',
+                platformDisplayName: def?.displayName || it.platform
+            };
+        });
 
-    // Sort all posts by timestamp (newest first)
-    allPosts.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-
-    return {
-        summary: allPosts.length > 0
-            ? `Unified Intelligence: ${allPosts.length} new signals from ${platformUpdates.length} platforms.`
-            : 'Your intelligence feeds are silent.',
-        platformUpdates,
-        posts: allPosts,
-        rawContent: allPosts.slice(0, 10).map((p: any) => `[${p.platform}] ${p.author}: ${p.content}`).join('\n')
-    };
-};
-
-/**
- * 🔗 Create Connection Session using Direct OAuth
- */
-export const createConnectSession = async (platform: string, deviceId: string, callbackUrl: string) => {
-    switch (platform.toLowerCase()) {
-        case 'twitter':
-        case 'x':
-            return TwitterOAuth.getAuthUrl(deviceId, callbackUrl);
-        case 'instagram':
-            return InstagramOAuth.getAuthUrl(deviceId, callbackUrl);
-        case 'facebook':
-            return FacebookOAuth.getAuthUrl(deviceId, callbackUrl);
-        case 'linkedin':
-            return LinkedInOAuth.getAuthUrl(deviceId, callbackUrl);
-        default:
-            throw new Error(`OAuth not implemented for platform: ${platform}`);
+        return {
+            summary: items.length > 0 ? `Unified Intelligence: ${items.length} new signals.` : 'Your intelligence feeds are silent.',
+            platformUpdates,
+            posts,
+            rawContent: posts.map((p: any) => `[${p.platform}] ${p.author}: ${p.content}`).join('\n')
+        };
+    } catch (error: any) {
+        return { summary: "SYNC_ERROR", platformUpdates: [], posts: [], rawContent: "" };
     }
 };
 
 /**
- * 🚀 Exchange OAuth Code for Token and persist
+ * 🔗 Headless Zernio Session: Bypasses their dashboard
  */
+export const createConnectSession = async (platform: string, deviceId: string, callbackUrl: string) => {
+    try {
+        const user = await User.findOne({ where: { deviceId } });
+        if (!user) throw new Error('User not found');
+
+        if (!user.zernioProfileId) {
+            user.zernioProfileId = await ZernioAdapter.getOrCreateProfile(deviceId);
+            await user.save();
+        }
+
+        const state = Buffer.from(JSON.stringify({ deviceId, platform })).toString('base64');
+
+        // Use Zernio's auth flow but pass our callbackUrl to return to Mistreal app
+        return await ZernioAdapter.getAuthUrl(platform, user.zernioProfileId!, undefined, state);
+    } catch (error: any) {
+        throw new Error(`Social connection failed: ${error.message}`);
+    }
+};
+
 export const exchangeOAuthCode = async (deviceId: string, platform: string, code: string, callbackUrl: string) => {
+    // With Zernio, their callback handler handles the code exchange.
+    // We just need to ensure the platform is marked as connected in our DB.
     const user = await User.findOne({ where: { deviceId } });
     if (!user) throw new Error('User not found');
 
-    let tokenData: any;
-    switch (platform.toLowerCase()) {
-        case 'twitter':
-        case 'x':
-            tokenData = await TwitterOAuth.exchangeCodeForToken(code, callbackUrl);
-            user.twitterAccessToken = tokenData.accessToken;
-            user.twitterRefreshToken = tokenData.refreshToken;
-            break;
-        case 'instagram':
-            tokenData = await InstagramOAuth.exchangeCodeForToken(code, callbackUrl);
-            user.instagramAccessToken = tokenData.accessToken;
-            break;
-        case 'facebook':
-            tokenData = await FacebookOAuth.exchangeCodeForToken(code, callbackUrl);
-            user.facebookAccessToken = tokenData.accessToken;
-            break;
-        case 'linkedin':
-            tokenData = await LinkedInOAuth.exchangeCodeForToken(code, callbackUrl);
-            user.linkedinAccessToken = tokenData.accessToken;
-            break;
-        default:
-            throw new Error(`Token exchange not implemented for: ${platform}`);
-    }
-
-    // Add to connected list
     const connected = user.connectedPlatforms || [];
     if (!connected.includes(platform)) {
         connected.push(platform);
         user.connectedPlatforms = connected;
     }
-
     await user.save();
 };
 
-/**
- * 🚀 Post via platform-specific API
- */
 export const sendSocialAction = async (user: User, action: { platform: string, type: string, content: string, targetId?: string }) => {
-    // This would be implemented for each platform (e.g. TwitterOAuth.postTweet)
-    // For now returning success to keep the flow alive
-    return { success: true, message: `Action simulated for ${action.platform}` };
+    if (!user.zernioProfileId) throw new Error('Connect your social profile first.');
+    return await ZernioAdapter.sendAction(user.zernioProfileId, action.platform, action.content, action.type);
 };
