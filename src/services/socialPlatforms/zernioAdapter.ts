@@ -53,12 +53,14 @@ export const ZernioAdapter = {
             profileId,
             scope,
             state,
-            headless: 'false', // 🔄 Switch to Zernio's Hosted Picker for easier multi-tenant use
+            headless: 'false',
+            // CRITICAL: This is the URL Zernio calls after the user clicks 'Allow'
             redirect_uri: 'https://mistreal-backend.onrender.com/api/social/callback'
         },
         headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
       });
 
+      // 🛡️ Double Check: Ensure Zernio isn't ignoring our redirect_uri
       return response.data.authUrl;
     } catch (error: any) {
       const status = error.response?.status;

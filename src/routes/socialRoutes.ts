@@ -90,7 +90,10 @@ router.get('/callback', async (req: Request, res: Response) => {
     const callbackUrl = `${process.env.APP_URL || 'https://mistreal-backend.onrender.com'}/api/social/callback`;
     await exchangeOAuthCode(deviceId, decodedPlatform, code as string, callbackUrl);
 
-    // 🏆 Success Response: Direct Deep Link Handshake
+    // 🚀 CRITICAL REDIRECT: Immediate Deep Link Handshake
+    const appDeepLink = `mistreal://social-connected?platform=${decodedPlatform}&success=true&deviceId=${deviceId}`;
+
+    // 🏆 Friendly Handshake Page
     res.send(`
       <html>
         <head>
@@ -110,13 +113,12 @@ router.get('/callback', async (req: Request, res: Response) => {
             <div class="loader"></div>
             <h1>Intelligence Secured</h1>
             <p>Mistreal AI is now linked to your <b>${decodedPlatform}</b>.</p>
-            <a href="mistreal://social-connected?platform=${decodedPlatform}&success=true&deviceId=${deviceId}" class="btn">Return to Agent</a>
+            <a href="${appDeepLink}" class="btn">Return to Agent</a>
           </div>
           <script>
-            // Silent Handshake: Auto-redirect after 1.5s
-            setTimeout(() => {
-              window.location.href = "mistreal://social-connected?platform=${decodedPlatform}&success=true&deviceId=${deviceId}";
-            }, 1500);
+            // Silent Handshake: Immediate auto-redirect
+            window.location.href = "${appDeepLink}";
+            setTimeout(() => { window.location.href = "${appDeepLink}"; }, 1000);
           </script>
         </body>
       </html>
