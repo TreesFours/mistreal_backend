@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { UnifiedSocialService } from '../services/socialPlatforms/unified';
-import { createConnectSession, getAvailablePlatforms, sendSocialAction } from '../services/socialService';
+import { createConnectSession, getAvailablePlatforms, sendSocialAction, exchangeOAuthCode } from '../services/socialService';
 import { User } from '../models/userModel';
 
 import { validate, socialActionSchema } from '../middleware/validationMiddleware';
@@ -48,8 +48,9 @@ router.get('/connect/:platform', async (req: Request, res: Response) => {
   if (!deviceId) return res.status(400).send('Device ID is required');
 
   try {
-    const authUrl = await createConnectSession(platform as string, deviceId as string);
-    // REDIRECT instead of returning JSON
+    const callbackUrl = `${process.env.APP_URL || 'https://mistreal-backend.onrender.com'}/api/social/callback`;
+    const authUrl = await createConnectSession(platform as string, deviceId as string, callbackUrl);
+    // DIRECT OAUTH REDIRECT - No intermediate dashboard
     res.redirect(authUrl);
   } catch (error: any) {
     console.error(`Failed to create connection for ${platform}:`, error.message);
@@ -58,16 +59,14 @@ router.get('/connect/:platform', async (req: Request, res: Response) => {
 });
 
 /**
- * 🏁 ZERNIO CALLBACK HANDLER
- * Zernio redirects here after a user connects an account.
- * Since Zernio manages tokens, we just need to ensure our local 'User'
- * knows that the platform is connected and we can trigger a sync.
+ * 🏁 UNIFIED OAUTH CALLBACK HANDLER
+ * Direct OAuth handlers redirect here after success.
  */
 router.get('/callback', async (req: Request, res: Response) => {
   try {
-    const { state, platform, error: oauthError } = req.query;
+    const { state, code, platform, error: oauthError } = req.query;
 
-    // Decode state
+    // Decode state (Base64 JSON: {deviceId, platform})
     let deviceId: string = '';
     let decodedPlatform: string = '';
     try {
@@ -79,52 +78,43 @@ router.get('/callback', async (req: Request, res: Response) => {
       return res.redirect(`mistreal://social-connected?success=false&error=Invalid state`);
     }
 
-    if (oauthError) {
+    if (oauthError || !code) {
       return res.redirect(
-        `mistreal://social-connected?platform=${decodedPlatform}&success=false&error=${oauthError}&deviceId=${deviceId}`
+        `mistreal://social-connected?platform=${decodedPlatform}&success=false&error=${oauthError || 'Auth denied'}&deviceId=${deviceId}`
       );
     }
 
-    // Find or create user
-    const user = await getOrCreateUser(deviceId);
-    if (!user) {
-        throw new Error('Failed to find or create user');
-    }
+    // 🚀 Exchange code for Token and save to User
+    const callbackUrl = `${process.env.APP_URL || 'https://mistreal-backend.onrender.com'}/api/social/callback`;
+    await exchangeOAuthCode(deviceId, decodedPlatform, code as string, callbackUrl);
 
-    // Add canonical platform ID into connectedPlatforms so we know to sync it via Zernio
-    const connectedPlatforms = user.connectedPlatforms || [];
-    if (!connectedPlatforms.includes(decodedPlatform)) {
-        connectedPlatforms.push(decodedPlatform);
-        user.connectedPlatforms = connectedPlatforms;
-    }
-
-    await user.save();
-
-    // 🏆 Success Response: Show a friendly HTML page before redirecting (or instead of)
+    // 🏆 Success Response: Direct Deep Link Handshake
     res.send(`
       <html>
         <head>
           <meta name="viewport" content="width=device-width, initial-scale=1">
           <style>
             body { font-family: -apple-system, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #000; color: #fff; text-align: center; }
-            .card { background: #111; padding: 2rem; border-radius: 20px; border: 1px solid #333; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-            h1 { color: #81C784; margin-bottom: 0.5rem; }
-            p { opacity: 0.8; margin-bottom: 2rem; }
-            .btn { background: #81C784; color: #000; padding: 12px 24px; border-radius: 12px; text-decoration: none; font-weight: bold; }
+            .card { background: #111; padding: 2.5rem; border-radius: 24px; border: 1px solid #333; box-shadow: 0 10px 40px rgba(0,0,0,0.8); }
+            h1 { color: #81C784; margin-bottom: 0.5rem; font-size: 1.8rem; }
+            p { opacity: 0.7; margin-bottom: 2rem; font-size: 1.1rem; }
+            .loader { border: 3px solid #333; border-top: 3px solid #81C784; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; margin: 0 auto 20px; }
+            @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+            .btn { background: #81C784; color: #000; padding: 14px 28px; border-radius: 12px; text-decoration: none; font-weight: bold; display: inline-block; }
           </style>
         </head>
         <body>
           <div class="card">
-            <h1>Linked Successfully!</h1>
-            <p>Mistreal AI is now connected to your ${decodedPlatform} account.</p>
-            <p><b>Please close this browser window and return to the app.</b></p>
-            <a href="mistreal://social-connected?platform=${decodedPlatform}&success=true&deviceId=${deviceId}" class="btn">Return to App</a>
+            <div class="loader"></div>
+            <h1>Intelligence Secured</h1>
+            <p>Mistreal AI is now linked to your <b>${decodedPlatform}</b>.</p>
+            <a href="mistreal://social-connected?platform=${decodedPlatform}&success=true&deviceId=${deviceId}" class="btn">Return to Agent</a>
           </div>
           <script>
-            // Attempt auto-redirect after 3 seconds
+            // Silent Handshake: Auto-redirect after 1.5s
             setTimeout(() => {
               window.location.href = "mistreal://social-connected?platform=${decodedPlatform}&success=true&deviceId=${deviceId}";
-            }, 3000);
+            }, 1500);
           </script>
         </body>
       </html>
