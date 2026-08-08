@@ -2,6 +2,8 @@ import { Router, Request, Response } from 'express';
 import { UnifiedSocialService } from '../services/socialPlatforms/unified';
 import { createConnectSession, getAvailablePlatforms, sendSocialAction, exchangeOAuthCode } from '../services/socialService';
 import { User } from '../models/userModel';
+import { WebhookService } from '../services/webhookService';
+import logger from '../utils/logger';
 
 import { validate, socialActionSchema } from '../middleware/validationMiddleware';
 
@@ -236,6 +238,30 @@ router.post('/disconnect/:platform', async (req: Request, res: Response) => {
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
+});
+
+/**
+ * 🛰️ UNIFIED SOCIAL WEBHOOK
+ * Official entry point for Zernio event orchestration.
+ * URL: https://mistreal-backend.onrender.com/api/social/webhook
+ */
+router.post('/webhook', async (req: Request, res: Response) => {
+    const signature = req.headers['x-zernio-signature'] as string;
+    const payload = JSON.stringify(req.body);
+
+    // 1. Verify Security (If secret is configured)
+    if (process.env.ZERNIO_WEBHOOK_SECRET && !WebhookService.verifySignature(payload, signature)) {
+        logger.warn('🚫 Invalid Webhook Signature rejected.');
+        return res.status(401).send('Invalid Signature');
+    }
+
+    // 2. Respond 200 OK immediately to satisfy Zernio's timeout requirements
+    res.status(200).send('OK');
+
+    // 3. Process Event Asynchronously
+    WebhookService.handleEvent(req.body).catch(err => {
+        logger.error(`❌ Webhook Orchestration Error: ${err.message}`);
+    });
 });
 
 export default router;

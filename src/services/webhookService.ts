@@ -73,6 +73,18 @@ export class WebhookService {
                 case 'call.ended':
                     await this.handleCallEnded(user, data, platform, transaction);
                     break;
+                case 'account.connected':
+                    await this.handleAccountConnected(user, data, platform, transaction);
+                    break;
+                case 'account.disconnected':
+                    await this.handleAccountDisconnected(user, data, platform, transaction);
+                    break;
+                case 'post.published':
+                    await this.handlePostPublished(user, data, platform, transaction);
+                    break;
+                case 'message.sent':
+                    await this.handleMessageSent(user, data, platform, transaction);
+                    break;
                 case 'whatsapp.template.status_updated':
                     await this.handleWhatsAppTemplateUpdate(user, data, transaction);
                     break;
@@ -202,5 +214,31 @@ export class WebhookService {
         user.set('preferences', { ...user.preferences, unreadMetadata });
         user.changed('preferences', true);
         await user.save({ transaction });
+    }
+
+    private static async handleAccountConnected(user: any, data: any, platform: string, transaction: any) {
+        const connected = user.connectedPlatforms || [];
+        if (!connected.includes(platform.toLowerCase())) {
+            connected.push(platform.toLowerCase());
+            user.connectedPlatforms = connected;
+            await user.save({ transaction });
+            logger.info(`✅ [${platform}] Account connection secured via Webhook.`);
+        }
+    }
+
+    private static async handleAccountDisconnected(user: any, data: any, platform: string, transaction: any) {
+        const connected = user.connectedPlatforms || [];
+        user.connectedPlatforms = connected.filter((p: string) => p !== platform.toLowerCase());
+        await user.save({ transaction });
+        logger.warn(`🛑 [${platform}] Account disconnected via Webhook.`);
+    }
+
+    private static async handlePostPublished(user: any, data: any, platform: string, transaction: any) {
+        logger.info(`🚀 [${platform}] Post successfully published: ${data.post_id}`);
+        // Optionally update a "Last Published" timestamp or similar
+    }
+
+    private static async handleMessageSent(user: any, data: any, platform: string, transaction: any) {
+        logger.info(`📤 [${platform}] Message sent confirmation received.`);
     }
 }

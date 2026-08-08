@@ -53,7 +53,7 @@ export const ZernioAdapter = {
             profileId,
             scope,
             state,
-            headless: 'true',
+            headless: 'false', // 🔄 Switch to Zernio's Hosted Picker for easier multi-tenant use
             redirect_uri: 'https://mistreal-backend.onrender.com/api/social/callback'
         },
         headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
