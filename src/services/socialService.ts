@@ -100,8 +100,11 @@ export const createConnectSession = async (platform: string, deviceId: string) =
 
         const scope = platformScopes[platform.toLowerCase()];
 
-        // 3. Get the redirect URL
-        return await ZernioAdapter.getAuthUrl(platform, user.zernioProfileId!, scope);
+        // 3. Encode state for callback tracking
+        const state = Buffer.from(JSON.stringify({ deviceId, platform })).toString('base64');
+
+        // 4. Get the redirect URL
+        return await ZernioAdapter.getAuthUrl(platform, user.zernioProfileId!, scope, state);
     } catch (error: any) {
         throw new Error(`Social connection failed: ${error.message}`);
     }
