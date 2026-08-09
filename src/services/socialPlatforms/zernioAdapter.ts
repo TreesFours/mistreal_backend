@@ -54,7 +54,8 @@ export const ZernioAdapter = {
             scope,
             state,
             headless: 'false',
-            // CRITICAL: This is the URL Zernio calls after the user clicks 'Allow'
+            // Zernio uses redirect_url or redirect_uri depending on version, including both for safety
+            redirect_url: 'https://mistreal-backend.onrender.com/api/social/callback',
             redirect_uri: 'https://mistreal-backend.onrender.com/api/social/callback'
         },
         headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
