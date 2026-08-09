@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { UnifiedSocialService } from '../services/socialPlatforms/unified';
 import { createConnectSession, getAvailablePlatforms, sendSocialAction, exchangeOAuthCode } from '../services/socialService';
+import { ZernioAdapter } from '../services/socialPlatforms/zernioAdapter';
 import { User } from '../models/userModel';
 import { WebhookService } from '../services/webhookService';
 import logger from '../utils/logger';
