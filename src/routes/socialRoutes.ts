@@ -100,11 +100,12 @@ router.get('/callback', async (req: Request, res: Response) => {
 
     // 🛡️ Logic for Zernio vs Direct OAuth
     // Zernio headless mode returns metadata in query params (profileId, accountId, etc)
-    const isZernioFlow = !!(req.query.accountId || req.query.tempToken || ['linkedin', 'whatsapp', 'facebook', 'instagram'].includes(decodedPlatform.toLowerCase()));
+    const isZernioFlow = !!(req.query.accountId || req.query.tempToken || ['linkedin', 'whatsapp', 'facebook', 'instagram'].includes((decodedPlatform || '').toLowerCase()));
 
-    if (oauthError || (!code && !isZernioFlow)) {
+    // 🚀 FAILSAFE: If no code/tempToken but we have a valid platform, it's likely a redirect quirk
+    if (oauthError || (!code && !req.query.tempToken && !isZernioFlow)) {
       return res.redirect(
-        `mistreal://social-connected?platform=${decodedPlatform}&success=false&error=${oauthError || 'Auth denied'}&deviceId=${deviceId}`
+        `mistreal://social-connected?platform=${decodedPlatform || 'platform'}&success=false&error=${oauthError || 'Auth denied'}&deviceId=${deviceId}`
       );
     }
 
