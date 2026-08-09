@@ -83,15 +83,13 @@ export const createConnectSession = async (platform: string, deviceId: string, c
             await user.save();
         }
 
-        // 🛡️ Create URL-safe Base64 state to prevent issues with + and / characters in OAuth providers
-        const state = Buffer.from(JSON.stringify({ deviceId, platform }))
-            .toString('base64')
-            .replace(/\+/g, '-')
-            .replace(/\//g, '_')
-            .replace(/=+$/, '');
+        // 🛡️ Explicit LinkedIn Scopes to prevent "Auth Denied" due to insufficient permissions
+        const scope = platform.toLowerCase() === 'linkedin'
+            ? 'r_liteprofile,r_emailaddress,w_member_social'
+            : undefined;
 
         // Use Zernio's auth flow but pass our callbackUrl to return to Mistreal app
-        return await ZernioAdapter.getAuthUrl(platform, user.zernioProfileId!, undefined, state, callbackUrl);
+        return await ZernioAdapter.getAuthUrl(platform, user.zernioProfileId!, scope, state, callbackUrl);
     } catch (error: any) {
         throw new Error(`Social connection failed: ${error.message}`);
     }

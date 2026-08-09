@@ -56,9 +56,8 @@ export const ZernioAdapter = {
             profileId,
             scope,
             state,
-            headless: 'false',
-            redirect_url: callbackUrl,
-            redirect_uri: callbackUrl
+            headless: 'true',
+            redirect_url: callbackUrl
         },
         headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
       });
@@ -84,12 +83,14 @@ export const ZernioAdapter = {
    */
   fetchInbox: async (profileId: string) => {
     try {
+      if (!profileId) throw new Error('Security Error: profileId is required for data isolation.');
       const response = await axios.get(`${ZERNIO_API_URL}/inbox`, {
         params: { profileId },
         headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
       });
       return response.data.items || [];
     } catch (error: any) {
+      console.error(`Zernio Fetch Error [${profileId}]:`, error.message);
       return [];
     }
   },
@@ -99,6 +100,8 @@ export const ZernioAdapter = {
    */
   sendAction: async (profileId: string, platform: string, content: string, type: string, targetId?: string) => {
     try {
+      if (!profileId) throw new Error('Security Error: profileId is required for multi-tenant isolation.');
+
       const accountsResp = await axios.get(`${ZERNIO_API_URL}/accounts`, {
         params: { profileId },
         headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
@@ -153,6 +156,49 @@ export const ZernioAdapter = {
     } catch (error: any) {
       console.error(`Zernio Dispatch Error [${platform}/${type}]:`, error.response?.data || error.message);
       throw new Error(`Social action failed: ${error.response?.data?.error || error.message}`);
+    }
+  },
+
+  /**
+   * Step 5: Finalize Headless Connection
+   * Automatically selects the first available page/profile to complete the link.
+   */
+  finalizeHeadlessConnection: async (platform: string, profileId: string, tempToken: string, userProfile?: string) => {
+    try {
+      if (!profileId) throw new Error('Security Error: profileId is required for headless finalization.');
+
+      // 1. List available accounts for this platform connection
+      const listResp = await axios.get(`${ZERNIO_API_URL}/connect/${platform}/pages`, {
+        params: { profileId, tempToken },
+        headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
+      });
+
+      const pages = listResp.data.pages || listResp.data.elements || [];
+      if (pages.length === 0) throw new Error('No accounts found to connect.');
+
+      // 2. Select the first one automatically (Strategy: Direct Link)
+      // Note: For LinkedIn/Twitter this is usually just the user's profile.
+      const selectedAccount = pages[0];
+      const accountId = selectedAccount.id || selectedAccount.accountId || selectedAccount._id;
+
+      const selectResp = await axios.post(`${ZERNIO_API_URL}/connect/${platform}/select`, {
+        profileId,
+        tempToken,
+        accountId,
+        userProfile: userProfile ? JSON.parse(decodeURIComponent(userProfile)) : undefined,
+        redirect_url: 'https://mistreal-backend.onrender.com/api/social/callback/success' // Internal marker
+      }, {
+        headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
+      });
+
+      return {
+          success: true,
+          accountId,
+          platformDisplayName: selectedAccount.name || platform
+      };
+    } catch (error: any) {
+      console.error(`Zernio Headless Finalize Error [${platform}]:`, error.response?.data || error.message);
+      throw new Error(`Failed to finalize connection: ${error.response?.data?.error || error.message}`);
     }
   }
 };

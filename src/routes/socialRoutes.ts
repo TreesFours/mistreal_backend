@@ -52,7 +52,7 @@ router.get('/connect/:platform', async (req: Request, res: Response) => {
 
   try {
     const baseUrl = process.env.APP_URL || 'https://mistreal-backend.onrender.com';
-    const callbackUrl = `${baseUrl}/api/social/callback?deviceId=${deviceId}&platform=${platform}`;
+    const callbackUrl = `${baseUrl}/api/social/callback`;
     const authUrl = await createConnectSession(platform as string, deviceId as string, callbackUrl);
     // DIRECT OAUTH REDIRECT - No intermediate dashboard
     res.redirect(authUrl);
@@ -98,15 +98,46 @@ router.get('/callback', async (req: Request, res: Response) => {
       return res.redirect(`mistreal://social-connected?success=false&error=Invalid session state`);
     }
 
-    if (oauthError || !code) {
+    // 🛡️ Logic for Zernio vs Direct OAuth
+    // Zernio headless mode returns metadata in query params (profileId, accountId, etc)
+    const isZernioFlow = !!(req.query.accountId || req.query.tempToken || ['linkedin', 'whatsapp', 'facebook', 'instagram'].includes(decodedPlatform.toLowerCase()));
+
+    if (oauthError || (!code && !isZernioFlow)) {
       return res.redirect(
         `mistreal://social-connected?platform=${decodedPlatform}&success=false&error=${oauthError || 'Auth denied'}&deviceId=${deviceId}`
       );
     }
 
+    // 🚀 HEADLESS FINALIZATION: If we have a tempToken, we must call 'select' to finish the connection
+    if (req.query.tempToken) {
+        try {
+            const user = await User.findOne({ where: { deviceId } });
+            const profileId = user?.zernioProfileId || deviceId;
+
+            await ZernioAdapter.finalizeHeadlessConnection(
+                decodedPlatform,
+                profileId,
+                req.query.tempToken as string,
+                req.query.userProfile as string
+            );
+        } catch (e: any) {
+            console.warn('Headless finalization auto-select failed, but attempting to proceed:', e.message);
+        }
+    }
+
     // 🚀 Exchange code for Token and save to User
     const callbackUrl = `${process.env.APP_URL || 'https://mistreal-backend.onrender.com'}/api/social/callback`;
-    await exchangeOAuthCode(deviceId, decodedPlatform, code as string, callbackUrl);
+
+    // 🛡️ Resolve Zernio Profile ID if needed
+    let zernioProfileId = deviceId;
+    const user = await User.findOne({ where: { deviceId } });
+    if (user?.zernioProfileId) zernioProfileId = user.zernioProfileId;
+
+    // 🚀 Exchange code for Token and save to User
+    await exchangeOAuthCode(deviceId, decodedPlatform, (code as string) || 'ZERNIO_MANAGED', callbackUrl);
+
+    // If headless finalization was triggered above, it used deviceId.
+    // Let's ensure exchangeOAuthCode is robust.
 
     // 🚀 CRITICAL REDIRECT: Immediate Deep Link Handshake
     const appDeepLink = `mistreal://social-connected?platform=${decodedPlatform}&success=true&deviceId=${deviceId}`;

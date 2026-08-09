@@ -40,19 +40,16 @@ export class WebhookService {
         const transaction = await sequelize.transaction();
 
         try {
-            // Find user by profile_id (new flow) or user_token (legacy flow)
+            // 🛡️ SECURITY: Strict Multi-Tenant Lookup
+            // We search exclusively by profile_id to ensure the event belongs to the correct tenant.
+            // Zernio guarantees profile_id is present for all multi-tenant events.
             const user = await User.findOne({
-                where: {
-                    [Op.or]: [
-                        { zernioProfileId: profile_id || null },
-                        { zernioUserToken: user_token || null }
-                    ]
-                },
+                where: { zernioProfileId: profile_id || 'NOT_FOUND' },
                 transaction
             });
 
             if (!user) {
-                logger.warn(`⚠️ Orphaned event: No user found for token.`);
+                logger.warn(`⚠️ Security Alert: Unauthorized or Orphaned Zernio Webhook for profile_id: ${profile_id}`);
                 await transaction.rollback();
                 return;
             }
