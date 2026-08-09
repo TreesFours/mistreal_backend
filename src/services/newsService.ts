@@ -1,19 +1,20 @@
 import axios from 'axios';
-import { getAstroData, getWikipediaDeepDive, getSportsData, getMovieIntelligence, getNovelIntelligence } from './intelligenceService';
+import { getAstroData, getWikipediaDeepDive, getSportsData, getMovieIntelligence, getNovelIntelligence, getJournalIntelligence } from './intelligenceService';
 import { getDetailedAstroData } from './astroService';
 
 export const getNewsData = async (category: string = 'general', country: string = 'us') => {
     const apiKey = process.env.NEWS_API_KEY;
 
     try {
-        const [newsResp, nasaAstro, detailedAstro, wiki, sports, movies, novels] = await Promise.all([
+        const [newsResp, nasaAstro, detailedAstro, wiki, sports, movies, novels, journals] = await Promise.all([
             apiKey ? axios.get(`https://newsapi.org/v2/top-headlines`, { params: { category, country, apiKey } }) : Promise.resolve({ data: { articles: [] } }),
             getAstroData(),
             getDetailedAstroData(),
             getWikipediaDeepDive(),
             getSportsData(),
             getMovieIntelligence(),
-            getNovelIntelligence()
+            getNovelIntelligence(),
+            getJournalIntelligence()
         ]);
 
         const newsArticles = newsResp.data.articles.slice(0, 5).map((a: any) => ({
@@ -32,7 +33,8 @@ export const getNewsData = async (category: string = 'general', country: string 
             ...wiki,
             ...sports,
             ...movies,
-            ...novels
+            ...novels,
+            ...journals
         ];
 
         // 🕒 TIME-ORDERED INTERLEAVING

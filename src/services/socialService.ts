@@ -108,5 +108,5 @@ export const exchangeOAuthCode = async (deviceId: string, platform: string, code
 
 export const sendSocialAction = async (user: User, action: { platform: string, type: string, content: string, targetId?: string }) => {
     if (!user.zernioProfileId) throw new Error('Connect your social profile first.');
-    return await ZernioAdapter.sendAction(user.zernioProfileId, action.platform, action.content, action.type);
+    return await ZernioAdapter.sendAction(user.zernioProfileId, action.platform, action.content, action.type, action.targetId);
 };

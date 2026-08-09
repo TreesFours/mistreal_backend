@@ -92,12 +92,10 @@ export const ZernioAdapter = {
   },
 
   /**
-   * Step 4: Dispatch Content (Post/Status)
-   * The single endpoint that covers all platforms and posting modes.
+   * Step 4: Dispatch Content or Perform Actions (Like/Follow/DM)
    */
-  sendAction: async (profileId: string, platform: string, content: string, type: string) => {
+  sendAction: async (profileId: string, platform: string, content: string, type: string, targetId?: string) => {
     try {
-      // First, get the accountId for this platform within the profile
       const accountsResp = await axios.get(`${ZERNIO_API_URL}/accounts`, {
         params: { profileId },
         headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
@@ -106,6 +104,32 @@ export const ZernioAdapter = {
       const account = accountsResp.data.accounts.find((a: any) => a.platform === platform);
       if (!account) throw new Error(`${platform} not linked to this profile.`);
 
+      // 🛡️ BRANCH: Content vs Actions
+      if (type.toLowerCase() === 'like' || type.toLowerCase() === 'follow') {
+        const response = await axios.post(`${ZERNIO_API_URL}/actions`, {
+          platform,
+          accountId: account._id,
+          type: type.toLowerCase(),
+          targetId: targetId
+        }, {
+          headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
+        });
+        return response.data;
+      }
+
+      if (type === 'Direct Message') {
+        const response = await axios.post(`${ZERNIO_API_URL}/messages`, {
+            platform,
+            accountId: account._id,
+            recipientId: targetId,
+            content: { text: content }
+        }, {
+            headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
+        });
+        return response.data;
+      }
+
+      // Default: POST (Tweet, FB Post, etc)
       const postData: any = {
         content,
         publishNow: true,
@@ -114,7 +138,6 @@ export const ZernioAdapter = {
         ]
       };
 
-      // Handle Story/Status specific logic if needed by platform
       if (type === 'status' || type === 'story') {
         postData.platforms[0].options = { is_story: true };
       }
@@ -125,8 +148,8 @@ export const ZernioAdapter = {
 
       return response.data;
     } catch (error: any) {
-      console.error(`Zernio Dispatch Error [${platform}]:`, error.response?.data || error.message);
-      throw new Error(`Dispatch failed: ${error.response?.data?.error || error.message}`);
+      console.error(`Zernio Dispatch Error [${platform}/${type}]:`, error.response?.data || error.message);
+      throw new Error(`Social action failed: ${error.response?.data?.error || error.message}`);
     }
   }
 };

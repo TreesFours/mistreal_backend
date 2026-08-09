@@ -18,7 +18,8 @@ export const getDetailedAstroData = async () => {
     const auth = Buffer.from(`${appId}:${appSecret}`).toString('base64');
 
     try {
-        const dateStr = new Date().toISOString().split('T')[0];
+        const now = new Date();
+        const dateStr = now.toISOString().split('T')[0];
 
         // 1. Fetch Moon Phase Image
         // Use a generic observer (Lat 0, Lon 0) for the global feed
@@ -36,6 +37,9 @@ export const getDetailedAstroData = async () => {
             headers: { 'Authorization': `Basic ${auth}` }
         });
 
+        // 3. Simple Moon Phase Name Logic (since studio API doesn't return it)
+        const moonPhaseName = getMoonPhaseName(now);
+
         const majorPlanets = planetsResponse.data?.data?.table?.rows
             ?.filter((r: any) => ['mercury', 'venus', 'mars', 'jupiter', 'saturn'].includes(r.entry.id))
             ?.map((r: any) => r.entry.name)
@@ -43,7 +47,7 @@ export const getDetailedAstroData = async () => {
 
         return [{
             title: "[Astro] Celestial Intelligence",
-            description: `Moon phase data captured for ${dateStr}. Notable planetary positions relative to Earth: ${majorPlanets}.`,
+            description: `Moon phase: ${moonPhaseName}. Notable planetary positions: ${majorPlanets}.`,
             url: moonResponse.data?.data?.imageUrl || "",
             source: 'AstronomyAPI',
             timestamp: new Date().toISOString()
@@ -53,6 +57,26 @@ export const getDetailedAstroData = async () => {
         return [];
     }
 };
+
+/**
+ * Calculates Moon Phase Name based on Date
+ */
+function getMoonPhaseName(date: Date): string {
+    const lp = 2551443;
+    const now = new Date(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), date.getUTCHours(), date.getUTCMinutes(), date.getUTCSeconds());
+    const new_moon = new Date(1970, 0, 7, 20, 35, 0);
+    const phase = ((now.getTime() - new_moon.getTime()) / 1000) % lp;
+    const res = phase / lp;
+
+    if (res < 0.0625 || res > 0.9375) return "New Moon";
+    if (res < 0.1875) return "Waxing Crescent";
+    if (res < 0.3125) return "First Quarter";
+    if (res < 0.4375) return "Waxing Gibbous";
+    if (res < 0.5625) return "Full Moon";
+    if (res < 0.6875) return "Waning Gibbous";
+    if (res < 0.8125) return "Last Quarter";
+    return "Waning Crescent";
+}
 
 /**
  * 🛰️ NASA JPL Horizons Integration

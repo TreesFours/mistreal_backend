@@ -138,11 +138,12 @@ app.get('/api/weather', async (req, res) => {
         if (astroData.length > 0) {
             const description = astroData[0].description;
             // Extract moon phase and planets from description string
-            const moonMatch = description.match(/Moon phase data captured for (.*)\./);
-            const planetMatch = description.match(/Notable planetary positions relative to Earth: (.*)\./);
+            const moonMatch = description.match(/Moon phase: (.*)\. Notable/);
+            const planetMatch = description.match(/Notable planetary positions: (.*)\./);
 
-            weather.moonPhase = moonMatch ? "Retrieved" : "Updating...";
+            weather.moonPhase = moonMatch ? moonMatch[1] : "Updating...";
             weather.planets = planetMatch ? planetMatch[1] : "Calculating...";
+            weather.moonImageUrl = astroData[0].url; // Pass through the AstronomyAPI sketch URL
         }
     } catch (e) {}
 

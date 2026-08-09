@@ -180,9 +180,41 @@ router.get('/sync', async (req: Request, res: Response) => {
 router.get('/contacts', async (req: Request, res: Response) => {
   try {
     const { deviceId, platform } = req.query;
-    // Implementation of contacts fetch from Zernio would go here
-    // For now, return empty list to avoid 404
-    res.json({ success: true, contacts: [] });
+    if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
+
+    const user = await User.findOne({ where: { deviceId: String(deviceId) } });
+    if (!user || !user.zernioProfileId) return res.json({ success: true, contacts: [] });
+
+    const inbox = await ZernioAdapter.fetchInbox(user.zernioProfileId);
+
+    // Extract unique contacts from inbox
+    const contactMap = new Map();
+    inbox.forEach((item: any) => {
+        if (platform && item.platform.toLowerCase() !== String(platform).toLowerCase()) return;
+
+        const sender = item.author;
+        if (!sender || !sender.id) return;
+
+        if (!contactMap.has(sender.id)) {
+            contactMap.set(sender.id, {
+                id: sender.id,
+                name: sender.name || sender.handle || 'Social Contact',
+                platform: item.platform,
+                unreadCount: item.status === 'unread' ? 1 : 0,
+                lastMessage: item.content?.text || '',
+                timestamp: item.createdAt,
+                avatar: sender.avatar_url
+            });
+        } else if (item.status === 'unread') {
+            contactMap.get(sender.id).unreadCount++;
+        }
+    });
+
+    const contacts = Array.from(contactMap.values()).sort((a, b) =>
+        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
+
+    res.json({ success: true, contacts });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

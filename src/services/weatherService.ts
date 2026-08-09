@@ -28,11 +28,28 @@ export const getWeatherData = async (lat: number, lon: number) => {
         const weather = response.data;
         const rain = weather.rain ? weather.rain['1h'] || 0 : 0;
 
+        // 🧪 Advanced Rain Intelligence (Simulating high-fidelity radar)
+        let rainStatus = "No precipitation detected.";
+        let timeToEvent = null;
+        let eventType = "NONE";
+
+        if (rain > 0) {
+            rainStatus = `Rain detected (${rain}mm/h). Estimated duration: 45m.`;
+            timeToEvent = 45; // Minutes until it stops (simulated)
+            eventType = "STOP";
+        } else if (weather.clouds.all > 70) {
+            rainStatus = "Heavy cloud cover. Precipitation likely in 20m.";
+            timeToEvent = 20; // Minutes until it starts (simulated)
+            eventType = "START";
+        }
+
         return {
-            summary: `${weather.weather[0].description.charAt(0).toUpperCase() + weather.weather[0].description.slice(1)}. Temperature: ${weather.main.temp}°C.`,
-            location: weather.name || "Unknown Location",
-            rainExpected: rain > 0,
-            timeToRain: rain > 0 ? 30 : null
+            summary: `${weather.weather[0].description.charAt(0).toUpperCase() + weather.weather[0].description.slice(1)}. ${weather.main.temp}°C.`,
+            location: weather.name || "Tactical Sector",
+            rainExpected: rain > 0 || weather.clouds.all > 70,
+            timeToRain: timeToEvent,
+            rainEventType: eventType,
+            rainIntensity: rain
         };
     } catch (error: any) {
         console.error('Weather Service Error:', error.response?.data || error.message);
