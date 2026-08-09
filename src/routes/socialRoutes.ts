@@ -76,18 +76,31 @@ router.get('/callback', async (req: Request, res: Response) => {
 
     if (state) {
       try {
-        // 🛡️ Robust Base64 Decoding (Handles URL-safe and common encoding issues)
-        const sanitizedState = (state as string)
-          .replace(/ /g, '+')
+        // 🛡️ ULTRA-ROBUST DECODING
+        // Handles URL-safe base64, standard base64, and padding issues
+        let sanitizedState = (state as string)
           .replace(/-/g, '+')
           .replace(/_/g, '/');
 
-        const decoded = JSON.parse(Buffer.from(sanitizedState, 'base64').toString());
-        deviceId = decoded.deviceId || deviceId;
-        decodedPlatform = decoded.platform || decodedPlatform;
+        // Re-add padding if missing
+        while (sanitizedState.length % 4 !== 0) {
+          sanitizedState += '=';
+        }
+
+        const decodedStr = Buffer.from(sanitizedState, 'base64').toString('utf8');
+
+        // Check if it's JSON
+        if (decodedStr.startsWith('{')) {
+            const decoded = JSON.parse(decodedStr);
+            deviceId = decoded.deviceId || deviceId;
+            decodedPlatform = decoded.platform || decodedPlatform;
+        } else {
+            // It might be a raw deviceId or token
+            if (!deviceId) deviceId = decodedStr;
+        }
       } catch (e) {
         console.error('State decoding failed:', e);
-        // If it's not base64, maybe it's raw deviceId (some providers/proxies)
+        // Last resort: if the raw state looks like a UUID or device ID, use it
         if (!deviceId && (state as string).length > 10) {
            deviceId = state as string;
         }
@@ -95,7 +108,9 @@ router.get('/callback', async (req: Request, res: Response) => {
     }
 
     if (!deviceId) {
-      return res.redirect(`mistreal://social-connected?success=false&error=Invalid session state`);
+      console.error('CRITICAL: No deviceId found in callback. Query:', req.query);
+      // Try to recover from recent sessions if possible? No, safer to alert.
+      return res.redirect(`mistreal://social-connected?success=false&error=Invalid session state (missing ID)`);
     }
 
     // 🛡️ Logic for Zernio vs Direct OAuth
