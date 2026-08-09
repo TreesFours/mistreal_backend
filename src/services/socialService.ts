@@ -83,10 +83,15 @@ export const createConnectSession = async (platform: string, deviceId: string, c
             await user.save();
         }
 
-        const state = Buffer.from(JSON.stringify({ deviceId, platform })).toString('base64');
+        // 🛡️ Create URL-safe Base64 state to prevent issues with + and / characters in OAuth providers
+        const state = Buffer.from(JSON.stringify({ deviceId, platform }))
+            .toString('base64')
+            .replace(/\+/g, '-')
+            .replace(/\//g, '_')
+            .replace(/=+$/, '');
 
         // Use Zernio's auth flow but pass our callbackUrl to return to Mistreal app
-        return await ZernioAdapter.getAuthUrl(platform, user.zernioProfileId!, undefined, state);
+        return await ZernioAdapter.getAuthUrl(platform, user.zernioProfileId!, undefined, state, callbackUrl);
     } catch (error: any) {
         throw new Error(`Social connection failed: ${error.message}`);
     }

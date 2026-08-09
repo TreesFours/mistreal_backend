@@ -46,17 +46,19 @@ export const ZernioAdapter = {
    * Step 2: Get the Auth URL for any platform (including WhatsApp!)
    * Zernio handles the "Embedded Signup" or OAuth complexity automatically.
    */
-  getAuthUrl: async (platform: string, profileId: string, scope?: string, state?: string) => {
+  getAuthUrl: async (platform: string, profileId: string, scope?: string, state?: string, customRedirectUrl?: string) => {
     try {
+      const baseUrl = process.env.APP_URL || 'https://mistreal-backend.onrender.com';
+      const callbackUrl = customRedirectUrl || `${baseUrl}/api/social/callback`;
+
       const response = await axios.get(`${ZERNIO_API_URL}/connect/${encodeURIComponent(platform)}`, {
         params: {
             profileId,
             scope,
             state,
             headless: 'false',
-            // Zernio uses redirect_url or redirect_uri depending on version, including both for safety
-            redirect_url: 'https://mistreal-backend.onrender.com/api/social/callback',
-            redirect_uri: 'https://mistreal-backend.onrender.com/api/social/callback'
+            redirect_url: callbackUrl,
+            redirect_uri: callbackUrl
         },
         headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
       });

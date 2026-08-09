@@ -51,7 +51,8 @@ router.get('/connect/:platform', async (req: Request, res: Response) => {
   if (!deviceId) return res.status(400).send('Device ID is required');
 
   try {
-    const callbackUrl = `${process.env.APP_URL || 'https://mistreal-backend.onrender.com'}/api/social/callback`;
+    const baseUrl = process.env.APP_URL || 'https://mistreal-backend.onrender.com';
+    const callbackUrl = `${baseUrl}/api/social/callback?deviceId=${deviceId}&platform=${platform}`;
     const authUrl = await createConnectSession(platform as string, deviceId as string, callbackUrl);
     // DIRECT OAUTH REDIRECT - No intermediate dashboard
     res.redirect(authUrl);
@@ -70,15 +71,31 @@ router.get('/callback', async (req: Request, res: Response) => {
     const { state, code, platform, error: oauthError } = req.query;
 
     // Decode state (Base64 JSON: {deviceId, platform})
-    let deviceId: string = '';
-    let decodedPlatform: string = '';
-    try {
-      const decoded = JSON.parse(Buffer.from(state as string, 'base64').toString());
-      deviceId = decoded.deviceId || '';
-      decodedPlatform = decoded.platform || (platform as string);
-    } catch (e) {
-      console.error('Failed to decode state:', e);
-      return res.redirect(`mistreal://social-connected?success=false&error=Invalid state`);
+    let deviceId: string = (req.query.deviceId as string) || '';
+    let decodedPlatform: string = (req.query.platform as string) || (platform as string) || '';
+
+    if (state) {
+      try {
+        // 🛡️ Robust Base64 Decoding (Handles URL-safe and common encoding issues)
+        const sanitizedState = (state as string)
+          .replace(/ /g, '+')
+          .replace(/-/g, '+')
+          .replace(/_/g, '/');
+
+        const decoded = JSON.parse(Buffer.from(sanitizedState, 'base64').toString());
+        deviceId = decoded.deviceId || deviceId;
+        decodedPlatform = decoded.platform || decodedPlatform;
+      } catch (e) {
+        console.error('State decoding failed:', e);
+        // If it's not base64, maybe it's raw deviceId (some providers/proxies)
+        if (!deviceId && (state as string).length > 10) {
+           deviceId = state as string;
+        }
+      }
+    }
+
+    if (!deviceId) {
+      return res.redirect(`mistreal://social-connected?success=false&error=Invalid session state`);
     }
 
     if (oauthError || !code) {
