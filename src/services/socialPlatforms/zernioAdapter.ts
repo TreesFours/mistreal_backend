@@ -173,13 +173,16 @@ export const ZernioAdapter = {
         headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
       });
 
-      const pages = listResp.data.pages || listResp.data.elements || [];
-      if (pages.length === 0) throw new Error('No accounts found to connect.');
+      // Zernio sometimes returns data in 'pages', 'elements', or 'accounts' depending on the platform
+      const pages = listResp.data.pages || listResp.data.elements || listResp.data.accounts || [];
+      if (pages.length === 0) {
+          console.warn(`⚠️ No sub-accounts found for ${platform}. User might need to create a page/profile first.`);
+          return { success: false, error: 'NO_ACCOUNTS_FOUND' };
+      }
 
       // 2. Select the first one automatically (Strategy: Direct Link)
-      // Note: For LinkedIn/Twitter this is usually just the user's profile.
       const selectedAccount = pages[0];
-      const accountId = selectedAccount.id || selectedAccount.accountId || selectedAccount._id;
+      const accountId = selectedAccount.id || selectedAccount.accountId || selectedAccount._id || selectedAccount.username;
 
       const selectResp = await axios.post(`${ZERNIO_API_URL}/connect/${platform}/select`, {
         profileId,

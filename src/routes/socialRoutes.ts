@@ -131,12 +131,19 @@ router.get('/callback', async (req: Request, res: Response) => {
             const user = await User.findOne({ where: { deviceId } });
             const profileId = user?.zernioProfileId || deviceId;
 
+            console.info(`🔄 Finalizing headless link for ${decodedPlatform} (Profile: ${profileId})`);
+
             await ZernioAdapter.finalizeHeadlessConnection(
                 decodedPlatform,
                 profileId,
                 req.query.tempToken as string,
                 req.query.userProfile as string
             );
+
+            // 🛡️ CRITICAL: If headless finalization succeeds, immediately record the connection
+            // to ensure it shows up in Settings before the next sync.
+            await exchangeOAuthCode(deviceId, decodedPlatform, 'ZERNIO_HEADLESS', callbackUrl);
+
         } catch (e: any) {
             console.warn('Headless finalization auto-select failed, but attempting to proceed:', e.message);
         }
@@ -147,11 +154,13 @@ router.get('/callback', async (req: Request, res: Response) => {
 
     // 🛡️ Resolve Zernio Profile ID if needed
     let zernioProfileId = deviceId;
-    const user = await User.findOne({ where: { deviceId } });
-    if (user?.zernioProfileId) zernioProfileId = user.zernioProfileId;
+    const userForToken = await User.findOne({ where: { deviceId } });
+    if (userForToken?.zernioProfileId) zernioProfileId = userForToken.zernioProfileId;
 
     // 🚀 Exchange code for Token and save to User
-    await exchangeOAuthCode(deviceId, decodedPlatform, (code as string) || 'ZERNIO_MANAGED', callbackUrl);
+    if (code) {
+        await exchangeOAuthCode(deviceId, decodedPlatform, code as string, callbackUrl);
+    }
 
     // If headless finalization was triggered above, it used deviceId.
     // Let's ensure exchangeOAuthCode is robust.

@@ -113,11 +113,20 @@ export const exchangeOAuthCode = async (deviceId: string, platform: string, code
     if (!user) throw new Error('User not found');
 
     const connected = user.connectedPlatforms || [];
-    if (!connected.includes(platform)) {
-        connected.push(platform);
-        user.connectedPlatforms = connected;
+    const normalizedPlatform = platform.toLowerCase();
+
+    if (!connected.map(p => p.toLowerCase()).includes(normalizedPlatform)) {
+        connected.push(normalizedPlatform);
+        // Force Sequelize to recognize the array change
+        user.set('connectedPlatforms', connected);
+        user.changed('connectedPlatforms', true);
     }
+
+    // Explicitly mark as connected for specific platform tokens if needed by other logic
+    if (normalizedPlatform === 'linkedin') user.linkedinAccessToken = 'ZERNIO_MANAGED';
+
     await user.save();
+    console.log(`✅ ${normalizedPlatform} persistence confirmed for device ${deviceId}`);
 };
 
 export const sendSocialAction = async (user: User, action: { platform: string, type: string, content: string, targetId?: string }) => {
