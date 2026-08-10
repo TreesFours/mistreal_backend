@@ -75,6 +75,9 @@ router.get('/callback', async (req: Request, res: Response) => {
     let deviceId: string = (req.query.deviceId as string) || '';
     let decodedPlatform: string = (req.query.platform as string) || (platform as string) || '';
 
+    const baseUrl = process.env.APP_URL || 'https://mistreal-backend.onrender.com';
+    const callbackUrl = `${baseUrl}/api/social/callback`;
+
     if (state) {
       try {
         // 🛡️ ULTRA-ROBUST DECODING
@@ -148,9 +151,6 @@ router.get('/callback', async (req: Request, res: Response) => {
             console.warn('Headless finalization auto-select failed, but attempting to proceed:', e.message);
         }
     }
-
-    // 🚀 Exchange code for Token and save to User
-    const callbackUrl = `${process.env.APP_URL || 'https://mistreal-backend.onrender.com'}/api/social/callback`;
 
     // 🛡️ Resolve Zernio Profile ID if needed
     let zernioProfileId = deviceId;
