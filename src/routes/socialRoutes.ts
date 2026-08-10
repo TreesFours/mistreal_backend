@@ -155,11 +155,17 @@ router.get('/callback', async (req: Request, res: Response) => {
     // 🛡️ Resolve Zernio Profile ID if needed
     let zernioProfileId = deviceId;
     const userForToken = await User.findOne({ where: { deviceId } });
-    if (userForToken?.zernioProfileId) zernioProfileId = userForToken.zernioProfileId;
+
+    // Ensure the profileId is correctly recovered from DB if already set
+    if (userForToken?.zernioProfileId) {
+        zernioProfileId = userForToken.zernioProfileId;
+    } else if (req.query.profileId) {
+        zernioProfileId = req.query.profileId as string;
+    }
 
     // 🚀 Exchange code for Token and save to User
-    if (code) {
-        await exchangeOAuthCode(deviceId, decodedPlatform, code as string, callbackUrl);
+    if (code || isZernioFlow) {
+        await exchangeOAuthCode(deviceId, decodedPlatform, (code as string) || 'ZERNIO_MANAGED', callbackUrl);
     }
 
     // If headless finalization was triggered above, it used deviceId.

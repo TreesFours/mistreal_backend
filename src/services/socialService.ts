@@ -22,8 +22,12 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
 
     try {
         const items = await ZernioAdapter.fetchInbox(user.zernioProfileId);
+
+        // 🛡️ SECURITY: Log the raw items for debugging (backend only)
+        console.log(`📡 [SYNC] Profile ${user.zernioProfileId} retrieved ${items.length} items from Zernio.`);
+
         const filteredItems = isPro ? items : items.filter((i: any) =>
-            ['twitter', 'x', 'whatsapp', 'linkedin', 'discord'].includes(i.platform.toLowerCase())
+            ['twitter', 'x', 'whatsapp', 'linkedin', 'facebook', 'discord', 'telegram', 'instagram'].includes((i.platform || '').toLowerCase())
         );
 
         const platformUpdates = filteredItems.reduce((acc: any[], item: any) => {
@@ -120,6 +124,12 @@ export const exchangeOAuthCode = async (deviceId: string, platform: string, code
         // Force Sequelize to recognize the array change
         user.set('connectedPlatforms', connected);
         user.changed('connectedPlatforms', true);
+    }
+
+    // 🛡️ CRITICAL: Ensure Zernio Profile ID mapping is persistent
+    if (!user.zernioProfileId) {
+        // Re-discover or initialize if missing during the exchange
+        user.zernioProfileId = await ZernioAdapter.getOrCreateProfile(deviceId);
     }
 
     // Explicitly mark as connected for specific platform tokens if needed by other logic

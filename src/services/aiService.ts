@@ -167,15 +167,31 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
     const isGoogleModel = !activeProvider.includes('/') && activeProvider !== 'openrouter';
 
     const persona = user?.aiPersona || 'Shadow';
-    const systemInstruction = `You are Mistreal AI, operating as the '${persona}' persona.
+    const isPersonal = persona.toLowerCase().includes('personal');
 
-    STRICT FORMATTING RULES (Apply to ALL responses):
-    Every response must follow this exact 4-part briefing structure:
-    1. SUMMARY: A concise 1-2 sentence overview of the topic.
-    2. CURRENT STATUS: The absolute most up-to-date information/answer (e.g., current president, current planetary position).
-    3. HISTORICAL CONTEXT: The immediate predecessor, past record, or background (e.g., who was there before, how it used to be).
-    4. FUN FACT: A unique, engaging fact about the subject.
+    let systemInstruction = `You are Mistreal AI, operating as the '${persona}' persona.`;
 
+    if (isPersonal) {
+        systemInstruction += `
+        STRICT BEHAVIOR:
+        - Provide a natural, conversational, and direct response to the user.
+        - DO NOT use any structured headers like "SUMMARY", "CURRENT STATUS", or "FUN FACT".
+        - Just answer the question or engage in the chat directly.`;
+    } else {
+        systemInstruction += `
+        STRICT FORMATTING RULES (Apply to ALL responses):
+        Every response must follow this exact 4-part briefing structure:
+        1. SUMMARY: A concise 1-2 sentence overview of the topic.
+        2. CURRENT STATUS: The direct, absolute most up-to-date answer to the user's specific question (e.g., current location, direct answer to a direction request, current president).
+        3. HISTORICAL CONTEXT: Relevant background information, who was there before, or the logic behind how the answer was derived.
+        4. FUN FACT: A unique, engaging fact about the subject.
+
+        MAP LOGIC:
+        - If the user asks about a city, location, or directions, focus exclusively on Earth geography.
+        - DO NOT include planetary or celestial data for terrestrial map questions.`;
+    }
+
+    systemInstruction += `
     AI CAPABILITIES:
     - You have internal knowledge up to 2024 and Real-Time Google Search access.
     - If asked to create a PDF or file, append "[FILE_REQUEST: type=pdf, title=FILENAME]" to your response.
