@@ -84,11 +84,14 @@ export const createConnectSession = async (platform: string, deviceId: string, c
         }
 
         // 🛡️ Create URL-safe Base64 state to prevent issues with + and / characters in OAuth providers
+        // 🚀 CRITICAL: We also append deviceId directly to the callback URL as a redundant fallback
         const state = Buffer.from(JSON.stringify({ deviceId, platform }))
             .toString('base64')
             .replace(/\+/g, '-')
             .replace(/\//g, '_')
             .replace(/=+$/, '');
+
+        const fallbackCallback = `${callbackUrl}${callbackUrl.includes('?') ? '&' : '?'}deviceId=${deviceId}&platform=${platform}`;
 
         // 🛡️ Explicit LinkedIn Scopes to prevent "Auth Denied" due to insufficient permissions
         const scope = platform.toLowerCase() === 'linkedin'
@@ -96,7 +99,8 @@ export const createConnectSession = async (platform: string, deviceId: string, c
             : undefined;
 
         // Use Zernio's auth flow but pass our callbackUrl to return to Mistreal app
-        return await ZernioAdapter.getAuthUrl(platform, user.zernioProfileId!, scope, state, callbackUrl);
+        // 🚀 Using the fallbackCallback with redundant deviceId/platform params
+        return await ZernioAdapter.getAuthUrl(platform, user.zernioProfileId!, scope, state, fallbackCallback);
     } catch (error: any) {
         throw new Error(`Social connection failed: ${error.message}`);
     }

@@ -71,6 +71,7 @@ router.get('/callback', async (req: Request, res: Response) => {
     const { state, code, platform, error: oauthError } = req.query;
 
     // Decode state (Base64 JSON: {deviceId, platform})
+    // 🚀 REDUNDANCY: Always prioritize direct query params over state decoding
     let deviceId: string = (req.query.deviceId as string) || '';
     let decodedPlatform: string = (req.query.platform as string) || (platform as string) || '';
 
