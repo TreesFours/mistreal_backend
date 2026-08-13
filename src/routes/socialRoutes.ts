@@ -4,34 +4,75 @@ import { createConnectSession, getAvailablePlatforms, sendSocialAction, exchange
 import { ZernioAdapter } from '../services/socialPlatforms/zernioAdapter';
 import { User } from '../models/userModel';
 import { WebhookService } from '../services/webhookService';
+import { authenticateUser } from '../utils/authMiddleware';
 import logger from '../utils/logger';
 
 import { validate, socialActionSchema } from '../middleware/validationMiddleware';
 
 const router = Router();
 
-// 🛡️ Internal Helper
-const getOrCreateUser = async (deviceId: string) => {
+/**
+ * 🛡️ STRATEGIC USER RESOLUTION
+ * Handles device changes by prioritizing Firebase UID.
+ */
+const getResolvedUser = async (req: any) => {
+    const deviceId = (req.query.deviceId || req.body.deviceId) as string;
+    const firebaseUid = req.user?.uid;
+
     try {
-        const [user] = await User.findOrCreate({
-            where: { deviceId },
-            defaults: { deviceId, isPro: false, subscriptionTier: 'free' }
-        });
-        return user;
-    } catch (e) { return null; }
+        let user: User | null = null;
+
+        // 1. Primary Lookup: Firebase UID (The real identity)
+        if (firebaseUid) {
+            user = await User.findOne({ where: { firebaseUid } });
+        }
+
+        // 2. Secondary Lookup: Device ID (Legacy/Unlinked identity)
+        if (!user && deviceId) {
+            user = await User.findOne({ where: { deviceId } });
+        }
+
+        // 3. Maintenance: Link identities
+        if (user) {
+            let changed = false;
+            if (firebaseUid && !user.firebaseUid) {
+                user.firebaseUid = firebaseUid;
+                changed = true;
+            }
+            if (deviceId && user.deviceId !== deviceId) {
+                // Check if deviceId is already taken by another record
+                const existingDeviceOwner = await User.findOne({ where: { deviceId } });
+                if (!existingDeviceOwner) {
+                    user.deviceId = deviceId;
+                    changed = true;
+                }
+            }
+            if (changed) await user.save();
+            return user;
+        }
+
+        // 4. Creation: New user
+        if (deviceId) {
+            return await User.create({
+                deviceId,
+                firebaseUid,
+                isPro: false,
+                subscriptionTier: 'free'
+            });
+        }
+
+        return null;
+    } catch (e) {
+        logger.error(`User Resolution Error: ${e}`);
+        return null;
+    }
 };
 
 // 📱 Get Available Platforms (Now includes connection status)
-router.get('/platforms', async (req: Request, res: Response) => {
-    const { deviceId } = req.query;
-    let isPro = false;
-    let connectedPlatforms: string[] = [];
-
-    if (deviceId) {
-        const user = await getOrCreateUser(String(deviceId));
-        isPro = user?.isPro ?? false;
-        connectedPlatforms = user?.connectedPlatforms || [];
-    }
+router.get('/platforms', authenticateUser, async (req: Request, res: Response) => {
+    const user = await getResolvedUser(req);
+    const isPro = user?.isPro ?? false;
+    const connectedPlatforms = user?.connectedPlatforms || [];
 
     const platforms = await getAvailablePlatforms(isPro);
 
@@ -45,10 +86,12 @@ router.get('/platforms', async (req: Request, res: Response) => {
 });
 
 // === PROFESSIONAL DIRECT OAUTH ROUTES ===
-router.get('/connect/:platform', async (req: Request, res: Response) => {
+router.get('/connect/:platform', authenticateUser, async (req: Request, res: Response) => {
   const { platform } = req.params;
-  const { deviceId } = req.query;
-  if (!deviceId) return res.status(400).send('Device ID is required');
+  const user = await getResolvedUser(req);
+  const deviceId = user?.deviceId || (req.query.deviceId as string);
+
+  if (!deviceId) return res.status(400).send('Identification required');
 
   try {
     const baseUrl = process.env.APP_URL || 'https://mistreal-backend.onrender.com';
@@ -210,12 +253,12 @@ router.get('/callback', async (req: Request, res: Response) => {
   }
 });
 
-router.post('/action', validate(socialActionSchema), async (req: Request, res: Response) => {
+router.post('/action', authenticateUser, validate(socialActionSchema), async (req: Request, res: Response) => {
   try {
-    const { deviceId, platform, type, content, targetId } = req.body;
-    const user = await User.findOne({ where: { deviceId } });
+    const user = await getResolvedUser(req);
     if (!user) return res.status(404).json({ error: 'User not found' });
 
+    const { platform, type, content, targetId } = req.body;
     const result = await sendSocialAction(user, { platform, type, content, targetId });
     res.json(result);
   } catch (error: any) {
@@ -223,12 +266,9 @@ router.post('/action', validate(socialActionSchema), async (req: Request, res: R
   }
 });
 
-router.post('/sync', async (req: Request, res: Response) => {
+router.post('/sync', authenticateUser, async (req: Request, res: Response) => {
   try {
-    const { deviceId } = req.body;
-    if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
-    const user = await User.findOne({ where: { deviceId } });
-
+    const user = await getResolvedUser(req);
     if (!user) {
         return res.status(200).json({ summary: "USER_NOT_FOUND", posts: [], platformUpdates: [] });
     }
@@ -241,12 +281,9 @@ router.post('/sync', async (req: Request, res: Response) => {
 });
 
 // Added GET support for sync to match Android app
-router.get('/sync', async (req: Request, res: Response) => {
+router.get('/sync', authenticateUser, async (req: Request, res: Response) => {
   try {
-    const { deviceId } = req.query;
-    if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
-    const user = await User.findOne({ where: { deviceId: String(deviceId) } });
-
+    const user = await getResolvedUser(req);
     if (!user) {
         return res.status(200).json({ summary: "USER_NOT_FOUND", posts: [], platformUpdates: [] });
     }
@@ -258,14 +295,12 @@ router.get('/sync', async (req: Request, res: Response) => {
   }
 });
 
-router.get('/contacts', async (req: Request, res: Response) => {
+router.get('/contacts', authenticateUser, async (req: Request, res: Response) => {
   try {
-    const { deviceId, platform } = req.query;
-    if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
-
-    const user = await User.findOne({ where: { deviceId: String(deviceId) } });
+    const user = await getResolvedUser(req);
     if (!user || !user.zernioProfileId) return res.json({ success: true, contacts: [] });
 
+    const { platform } = req.query;
     const inbox = await ZernioAdapter.fetchInbox(user.zernioProfileId);
 
     // Extract unique contacts from inbox
@@ -301,18 +336,15 @@ router.get('/contacts', async (req: Request, res: Response) => {
   }
 });
 
-router.get('/unread', async (req: Request, res: Response) => {
+router.get('/unread', authenticateUser, async (req: Request, res: Response) => {
   try {
-    const { deviceId } = req.query;
-    if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
-
-    const user = await User.findOne({ where: { deviceId: String(deviceId) } });
+    const user = await getResolvedUser(req);
     if (!user) return res.status(404).json({ error: 'User not found' });
 
     // Retrieve unread items from preferences.unreadMetadata populated by WebhookService
     const unreadMetadata = user.preferences?.unreadMetadata || {};
     const unreadItems: any[] = [];
-
+// ... (rest of the logic remains the same)
     Object.keys(unreadMetadata).forEach(platform => {
         if (Array.isArray(unreadMetadata[platform])) {
             unreadMetadata[platform].forEach((item: any) => {
@@ -322,14 +354,13 @@ router.get('/unread', async (req: Request, res: Response) => {
                     platform: platform,
                     text: item.content || item.type,
                     timestamp: item.timestamp,
-                    isOnline: false, // Defaulting to false as real-time online status requires separate tracking
+                    isOnline: false,
                     lastSeen: null
                 });
             });
         }
     });
 
-    // Sort by timestamp newest first
     unreadItems.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
     res.json({ success: true, unreadItems });
@@ -338,11 +369,46 @@ router.get('/unread', async (req: Request, res: Response) => {
   }
 });
 
-router.post('/disconnect/:platform', async (req: Request, res: Response) => {
+router.get('/history', authenticateUser, async (req: Request, res: Response) => {
   try {
-    const { deviceId } = req.body;
+    const user = await getResolvedUser(req);
+    if (!user || !user.zernioProfileId) return res.json({ success: true, messages: [] });
+
+    const { platform, targetId } = req.query;
+    if (!platform || !targetId) {
+        return res.status(400).json({ error: 'platform and targetId are required' });
+    }
+
+    const inbox = await ZernioAdapter.fetchInbox(user.zernioProfileId);
+// ...
+    const messages = inbox
+        .filter((item: any) =>
+            item.platform.toLowerCase() === String(platform).toLowerCase() &&
+            (item.author?.id === String(targetId) || item.recipientId === String(targetId))
+        )
+        .map((item: any) => ({
+            id: item._id,
+            platform: item.platform,
+            direction: item.direction || (item.author?.id === String(targetId) ? 'incoming' : 'outgoing'),
+            text: item.content?.text || '',
+            timestamp: item.createdAt,
+            attachments: item.content?.attachments?.map((a: any) => ({
+                type: a.type,
+                url: a.url
+            }))
+        }))
+        .sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+    res.json({ success: true, messages });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/disconnect/:platform', authenticateUser, async (req: Request, res: Response) => {
+  try {
+    const user = await getResolvedUser(req);
     const { platform } = req.params;
-    const user = await User.findOne({ where: { deviceId } });
 
     if (user) {
         const platforms = user.connectedPlatforms || [];

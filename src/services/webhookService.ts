@@ -1,11 +1,14 @@
 // backend/src/services/webhookService.ts
 import crypto from 'crypto';
 import { Op } from 'sequelize';
+import axios from 'axios';
+import * as admin from 'firebase-admin';
 import logger from '../utils/logger';
 import { User, sequelize } from '../models/userModel';
 
 export class WebhookService {
     private static readonly SECRET = process.env.ZERNIO_WEBHOOK_SECRET;
+    private static readonly ZERNIO_API_KEY = process.env.ZERNIO_API_KEY || '';
 
     /**
      * 🛡️ SECURITY: Best-practice HMAC Verification
@@ -99,6 +102,40 @@ export class WebhookService {
 
     private static async handleIncomingMessage(user: any, data: any, platform: string, transaction: any) {
         const sender = data.sender?.name || data.sender?.id || "Unknown";
+
+        // 📸 WhatsApp Media Handling: Download and store in Firebase Storage
+        if (platform.toLowerCase() === 'whatsapp' && data.attachments) {
+            for (const attachment of data.attachments) {
+                if (attachment.url && attachment.url.includes('zernio.com')) {
+                    try {
+                        logger.info(`📥 WhatsApp Media detected: Downloading from ${attachment.url}`);
+
+                        // 1. Download from Zernio
+                        const response = await axios.get(attachment.url, {
+                            headers: { 'Authorization': `Bearer ${this.ZERNIO_API_KEY}` },
+                            responseType: 'arraybuffer'
+                        });
+
+                        // 2. Upload to Firebase Storage
+                        const bucket = admin.storage().bucket();
+                        const fileName = `media/${user.deviceId}/${Date.now()}_${attachment.id || 'file'}`;
+                        const file = bucket.file(fileName);
+
+                        await file.save(Buffer.from(response.data), {
+                            metadata: { contentType: response.headers['content-type'] }
+                        });
+
+                        // 3. Make public or get Signed URL
+                        await file.makePublic();
+                        attachment.url = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+
+                        logger.info(`✅ WhatsApp Media secured: ${attachment.url}`);
+                    } catch (e: any) {
+                        logger.error(`❌ Media Download/Upload failed: ${e.message}`);
+                    }
+                }
+            }
+        }
 
         // Update unread count atomically
         user.unreadMessagesCount = (user.unreadMessagesCount || 0) + 1;
