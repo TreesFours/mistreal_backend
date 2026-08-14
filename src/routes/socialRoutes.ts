@@ -1,8 +1,9 @@
 import { Router, Request, Response } from 'express';
+import { Op } from 'sequelize';
 import { UnifiedSocialService } from '../services/socialPlatforms/unified';
 import { createConnectSession, getAvailablePlatforms, sendSocialAction, exchangeOAuthCode } from '../services/socialService';
 import { ZernioAdapter } from '../services/socialPlatforms/zernioAdapter';
-import { User } from '../models/userModel';
+import { User, SocialEvent } from '../models/userModel';
 import { WebhookService } from '../services/webhookService';
 import { authenticateUser } from '../utils/authMiddleware';
 import logger from '../utils/logger';
@@ -310,12 +311,12 @@ router.get('/contacts', authenticateUser, async (req: Request, res: Response) =>
     }
 
     // 📱 Primary Mode: Fetch full contact list from Zernio
-    const contacts = await ZernioAdapter.fetchContacts(user.zernioProfileId, platform ? String(platform) : undefined);
+    const zernioContacts = await ZernioAdapter.fetchContacts(user.zernioProfileId, platform ? String(platform) : undefined);
 
-    if (contacts.length > 0) {
+    if (zernioContacts.length > 0) {
         return res.json({
             success: true,
-            contacts: contacts.map((c: any) => ({
+            contacts: zernioContacts.map((c: any) => ({
                 id: c.id || c._id,
                 name: c.name || c.handle || 'Social Contact',
                 platform: c.platform,
@@ -350,11 +351,11 @@ router.get('/contacts', authenticateUser, async (req: Request, res: Response) =>
         }
     });
 
-    const contacts = Array.from(contactMap.values()).sort((a, b) =>
+    const sortedContacts = Array.from(contactMap.values()).sort((a, b) =>
         new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
     );
 
-    res.json({ success: true, contacts });
+    res.json({ success: true, contacts: sortedContacts });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -417,7 +418,7 @@ router.get('/history', authenticateUser, async (req: Request, res: Response) => 
     });
 
     if (events.length > 0) {
-        const messages = events.map(e => ({
+        const messages = events.map((e: any) => ({
             id: e.externalId,
             platform: e.platform,
             direction: e.senderId === String(targetId) ? 'incoming' : 'outgoing',
