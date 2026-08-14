@@ -121,8 +121,10 @@ export class WebhookService {
                         const fileName = `media/${user.deviceId}/${Date.now()}_${attachment.id || 'file'}`;
                         const file = bucket.file(fileName);
 
+                        const contentType = response.headers['content-type']?.toString() || 'application/octet-stream';
+
                         await file.save(Buffer.from(response.data), {
-                            metadata: { contentType: response.headers['content-type'] }
+                            metadata: { contentType: contentType }
                         });
 
                         // 3. Make public or get Signed URL
