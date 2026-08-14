@@ -90,7 +90,25 @@ export const ZernioAdapter = {
       });
       return response.data.items || [];
     } catch (error: any) {
-      console.error(`Zernio Fetch Error [${profileId}]:`, error.message);
+      console.error(`Zernio Inbox Error [${profileId}]:`, error.response?.data || error.message);
+      return [];
+    }
+  },
+
+  /**
+   * Step 3b: Fetch Feed (Posts/Timeline)
+   * Fetches the unified social stream (what you see on LinkedIn/Twitter timelines)
+   */
+  fetchFeed: async (profileId: string) => {
+    try {
+      if (!profileId) throw new Error('profileId required');
+      const response = await axios.get(`${ZERNIO_API_URL}/feed`, {
+        params: { profileId },
+        headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
+      });
+      return response.data.items || [];
+    } catch (error: any) {
+      console.error(`Zernio Feed Error [${profileId}]:`, error.response?.data || error.message);
       return [];
     }
   },

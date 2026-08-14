@@ -30,37 +30,40 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
             author: { id: e.senderId, name: e.senderName },
             content: { text: e.content },
             createdAt: e.timestamp,
-            metadata: e.metadata
+            metadata: e.metadata,
+            type: e.type
         }));
 
         // 🚰 HYDRATION: If DB is empty, do a one-time sync from Zernio
         if (items.length === 0 && user.zernioProfileId) {
-            console.info(`🚰 [SYNC] DB empty. Hydrating from Zernio for Profile: ${user.zernioProfileId}`);
+            console.info(`🚰 [SYNC] DB empty. Hydrating from Zernio Inbox & Feed for Profile: ${user.zernioProfileId}`);
             try {
-                const inboxItems = await ZernioAdapter.fetchInbox(user.zernioProfileId);
-                console.info(`📥 [SYNC] Zernio returned ${inboxItems.length} items for Profile ${user.zernioProfileId}`);
+                // Fetch both DMs (Inbox) AND Social Posts (Feed)
+                const [inboxItems, feedItems] = await Promise.all([
+                    ZernioAdapter.fetchInbox(user.zernioProfileId),
+                    ZernioAdapter.fetchFeed(user.zernioProfileId)
+                ]);
 
-                if (inboxItems.length > 0) {
-                    console.debug(`📄 [SYNC SAMPLE]: ${JSON.stringify(inboxItems[0])}`);
-                }
+                const allRemoteItems = [...inboxItems, ...feedItems];
+                console.info(`📥 [SYNC] Zernio returned ${inboxItems.length} Inbox items and ${feedItems.length} Feed items.`);
 
-                for (const it of inboxItems) {
+                for (const it of allRemoteItems) {
                     await SocialEvent.findOrCreate({
                         where: { externalId: it._id || it.id },
                         defaults: {
                             deviceId: user.deviceId,
                             platform: it.platform.toLowerCase(),
-                            type: 'message',
+                            type: it.type || (feedItems.includes(it) ? 'post' : 'message'),
                             externalId: it._id || it.id,
                             senderId: it.author?.id,
-                            senderName: it.author?.name || 'Social Contact',
+                            senderName: it.author?.name || it.author?.handle || 'Social Contact',
                             content: it.content?.text || it.content?.body || "",
                             metadata: it.metadata || {},
                             timestamp: it.createdAt || new Date()
                         }
                     });
                 }
-                items = inboxItems;
+                items = allRemoteItems;
             } catch (fetchError: any) {
                 console.error(`❌ [SYNC] Zernio Fetch Failed: ${fetchError.message}`);
             }

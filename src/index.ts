@@ -320,6 +320,14 @@ app.use((req, res) => {
 });
 
 // Boot
-initDb().then(() => {
+initDb().then(async () => {
+    // 🚀 BOOTSTRAP: Fill intelligence buffers immediately on start
+    try {
+        await IntelligenceService.refreshGlobalIntel();
+        console.log('✅ Intelligence Engine Bootstrapped');
+    } catch (e) {
+        console.error('⚠️ Intel Bootstrap failed:', e);
+    }
+
     app.listen(port, () => { console.log(`🚀 Server Running on Port ${port}`); });
 });
