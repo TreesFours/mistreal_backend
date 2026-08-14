@@ -305,16 +305,30 @@ router.get('/contacts', authenticateUser, async (req: Request, res: Response) =>
     // 🔍 Search Discovery Mode
     if (search && platform) {
         logger.info(`🔍 Searching ${platform} for: ${search}`);
-        // Strategy: Query Zernio's discovery/search endpoint for the platform
-        // For now, we fetch inbox and filter, but a real app would hit Zernio search API.
         const results = await ZernioAdapter.searchPlatform(user.zernioProfileId, String(platform), String(search));
         return res.json({ success: true, contacts: results });
     }
 
-    const inbox = await ZernioAdapter.fetchInbox(user.zernioProfileId);
+    // 📱 Primary Mode: Fetch full contact list from Zernio
+    const contacts = await ZernioAdapter.fetchContacts(user.zernioProfileId, platform ? String(platform) : undefined);
 
-    // Extract unique contacts from inbox
+    if (contacts.length > 0) {
+        return res.json({
+            success: true,
+            contacts: contacts.map((c: any) => ({
+                id: c.id || c._id,
+                name: c.name || c.handle || 'Social Contact',
+                platform: c.platform,
+                unreadCount: 0, // Would need metadata check
+                avatar: c.avatar_url
+            }))
+        });
+    }
+
+    // Fallback: Extract from inbox if contacts API is empty/unsupported
+    const inbox = await ZernioAdapter.fetchInbox(user.zernioProfileId);
     const contactMap = new Map();
+// ...
     inbox.forEach((item: any) => {
         if (platform && item.platform.toLowerCase() !== String(platform).toLowerCase()) return;
 
@@ -382,34 +396,61 @@ router.get('/unread', authenticateUser, async (req: Request, res: Response) => {
 router.get('/history', authenticateUser, async (req: Request, res: Response) => {
   try {
     const user = await getResolvedUser(req);
-    if (!user || !user.zernioProfileId) return res.json({ success: true, messages: [] });
+    if (!user) return res.status(404).json({ error: 'User not found' });
 
     const { platform, targetId } = req.query;
     if (!platform || !targetId) {
         return res.status(400).json({ error: 'platform and targetId are required' });
     }
 
-    const inbox = await ZernioAdapter.fetchInbox(user.zernioProfileId);
-// ...
-    const messages = inbox
-        .filter((item: any) =>
-            item.platform.toLowerCase() === String(platform).toLowerCase() &&
-            (item.author?.id === String(targetId) || item.recipientId === String(targetId))
-        )
-        .map((item: any) => ({
-            id: item._id,
-            platform: item.platform,
-            direction: item.direction || (item.author?.id === String(targetId) ? 'incoming' : 'outgoing'),
-            text: item.content?.text || '',
-            timestamp: item.createdAt,
-            attachments: item.content?.attachments?.map((a: any) => ({
-                type: a.type,
-                url: a.url
-            }))
-        }))
-        .sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    // 💾 DB FIRST: Fetch history from our persisted events
+    const events = await SocialEvent.findAll({
+        where: {
+            deviceId: user.deviceId,
+            platform: String(platform).toLowerCase(),
+            [Op.or]: [
+                { senderId: String(targetId) },
+                { 'metadata.recipientId': String(targetId) }
+            ]
+        },
+        order: [['timestamp', 'ASC']]
+    });
 
-    res.json({ success: true, messages });
+    if (events.length > 0) {
+        const messages = events.map(e => ({
+            id: e.externalId,
+            platform: e.platform,
+            direction: e.senderId === String(targetId) ? 'incoming' : 'outgoing',
+            text: e.content,
+            timestamp: e.timestamp,
+            attachments: e.metadata?.attachments || []
+        }));
+        return res.json({ success: true, messages });
+    }
+
+    // Fallback: If DB is silent, try a live fetch from Zernio if profile exists
+    if (user.zernioProfileId) {
+        const inbox = await ZernioAdapter.fetchInbox(user.zernioProfileId);
+        const messages = inbox
+            .filter((item: any) =>
+                item.platform.toLowerCase() === String(platform).toLowerCase() &&
+                (item.author?.id === String(targetId) || item.recipientId === String(targetId))
+            )
+            .map((item: any) => ({
+                id: item._id,
+                platform: item.platform,
+                direction: item.direction || (item.author?.id === String(targetId) ? 'incoming' : 'outgoing'),
+                text: item.content?.text || '',
+                timestamp: item.createdAt,
+                attachments: item.content?.attachments?.map((a: any) => ({
+                    type: a.type,
+                    url: a.url
+                }))
+            }));
+        return res.json({ success: true, messages });
+    }
+
+    res.json({ success: true, messages: [] });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

@@ -1,4 +1,4 @@
-import { User } from '../models/userModel';
+import { User, SocialEvent } from '../models/userModel';
 import { getPlatformDefinition, getAvailablePlatformDefinitions } from './socialPlatforms/platformRegistry';
 import { ZernioAdapter } from './socialPlatforms/zernioAdapter';
 
@@ -16,15 +16,46 @@ export const getAvailablePlatforms = async (isPro: boolean) => {
  * 🔄 Refined Zernio Sync logic
  */
 export const getSocialSummary = async (user: User, isPro: boolean = false) => {
-    if (!user.zernioProfileId) {
-        return { summary: "CONNECTION_REQUIRED", platformUpdates: [], posts: [], rawContent: "" };
-    }
-
     try {
-        const items = await ZernioAdapter.fetchInbox(user.zernioProfileId);
+        // 💾 PERSISTENCE FIRST: Fetch from our DB
+        const events = await SocialEvent.findAll({
+            where: { deviceId: user.deviceId },
+            order: [['timestamp', 'DESC']],
+            limit: 50
+        });
 
-        // 🛡️ SECURITY: Log the raw items for debugging (backend only)
-        console.log(`📡 [SYNC] Profile ${user.zernioProfileId} retrieved ${items.length} items from Zernio.`);
+        let items = events.map(e => ({
+            _id: e.externalId,
+            platform: e.platform,
+            author: { id: e.senderId, name: e.senderName },
+            content: { text: e.content },
+            createdAt: e.timestamp,
+            metadata: e.metadata
+        }));
+
+        // 🚰 HYDRATION: If DB is empty, do a one-time sync from Zernio
+        if (items.length === 0 && user.zernioProfileId) {
+            console.info(`🚰 Hydrating Social Cache for Profile: ${user.zernioProfileId}`);
+            const inboxItems = await ZernioAdapter.fetchInbox(user.zernioProfileId);
+
+            for (const it of inboxItems) {
+                await SocialEvent.findOrCreate({
+                    where: { externalId: it._id || it.id },
+                    defaults: {
+                        deviceId: user.deviceId,
+                        platform: it.platform.toLowerCase(),
+                        type: 'message',
+                        externalId: it._id || it.id,
+                        senderId: it.author?.id,
+                        senderName: it.author?.name || 'Social Contact',
+                        content: it.content?.text || it.content?.body || "",
+                        metadata: it.metadata || {},
+                        timestamp: it.createdAt || new Date()
+                    }
+                });
+            }
+            items = inboxItems;
+        }
 
         const filteredItems = isPro ? items : items.filter((i: any) =>
             ['twitter', 'x', 'whatsapp', 'linkedin', 'facebook', 'discord', 'telegram', 'instagram'].includes((i.platform || '').toLowerCase())

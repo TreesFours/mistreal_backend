@@ -4,9 +4,10 @@ import { Op } from 'sequelize';
 import axios from 'axios';
 import * as admin from 'firebase-admin';
 import logger from '../utils/logger';
-import { User, sequelize } from '../models/userModel';
+import { User, SocialEvent, sequelize } from '../models/userModel';
 
 export class WebhookService {
+// ... (rest of the imports/class structure)
     private static readonly SECRET = process.env.ZERNIO_WEBHOOK_SECRET;
     private static readonly ZERNIO_API_KEY = process.env.ZERNIO_API_KEY || '';
 
@@ -139,6 +140,23 @@ export class WebhookService {
             }
         }
 
+        // 💾 PERSISTENCE: Save to SocialEvent table for feed and history
+        await SocialEvent.create({
+            deviceId: user.deviceId,
+            platform: platform.toLowerCase(),
+            type: 'message',
+            externalId: data.message_id || data.id || `msg_${Date.now()}`,
+            senderId: data.sender?.id,
+            senderName: sender,
+            content: data.content?.text || data.text || "",
+            metadata: {
+                attachments: data.attachments || [],
+                conversationId: data.conversationId
+            },
+            timestamp: new Date(),
+            isRead: false
+        }, { transaction });
+
         // Update unread count atomically
         user.unreadMessagesCount = (user.unreadMessagesCount || 0) + 1;
 
@@ -180,6 +198,22 @@ export class WebhookService {
     }
 
     private static async handleCommentReceived(user: any, data: any, platform: string, transaction: any) {
+        // 💾 PERSISTENCE: Save to SocialEvent table
+        await SocialEvent.create({
+            deviceId: user.deviceId,
+            platform: platform.toLowerCase(),
+            type: 'comment',
+            externalId: data.comment_id || `comment_${Date.now()}`,
+            senderId: data.author?.id,
+            senderName: data.author?.name || "Unknown",
+            content: data.content || "",
+            metadata: {
+                post_id: data.post_id
+            },
+            timestamp: new Date(),
+            isRead: false
+        }, { transaction });
+
         const unreadMetadata = { ...(user.preferences?.unreadMetadata || {}) };
         const platformKey = platform.toLowerCase();
         if (!unreadMetadata[platformKey]) unreadMetadata[platformKey] = [];
@@ -270,11 +304,44 @@ export class WebhookService {
     }
 
     private static async handlePostPublished(user: any, data: any, platform: string, transaction: any) {
-        logger.info(`🚀 [${platform}] Post successfully published: ${data.post_id}`);
-        // Optionally update a "Last Published" timestamp or similar
+        // 💾 PERSISTENCE: Save our own published post to the flow
+        await SocialEvent.create({
+            deviceId: user.deviceId,
+            platform: platform.toLowerCase(),
+            type: 'post',
+            externalId: data.post_id || `post_${Date.now()}`,
+            senderId: 'self',
+            senderName: user.userName || 'Me',
+            content: data.content || "",
+            metadata: {
+                url: data.url
+            },
+            timestamp: new Date(),
+            isRead: true
+        }, { transaction });
+
+        logger.info(`🚀 [${platform}] Post successfully published and persisted.`);
     }
 
     private static async handleMessageSent(user: any, data: any, platform: string, transaction: any) {
-        logger.info(`📤 [${platform}] Message sent confirmation received.`);
+        // 💾 PERSISTENCE: Save our own outgoing message to history
+        await SocialEvent.create({
+            deviceId: user.deviceId,
+            platform: platform.toLowerCase(),
+            type: 'message',
+            externalId: data.message_id || data.id || `sent_${Date.now()}`,
+            senderId: 'self',
+            senderName: user.userName || 'Me',
+            content: data.content?.text || data.text || "",
+            metadata: {
+                attachments: data.attachments || [],
+                recipientId: data.recipientId,
+                conversationId: data.conversationId
+            },
+            timestamp: new Date(),
+            isRead: true
+        }, { transaction });
+
+        logger.info(`📤 [${platform}] Outgoing message persisted to history.`);
     }
 }

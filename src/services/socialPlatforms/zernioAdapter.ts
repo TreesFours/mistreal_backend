@@ -222,5 +222,21 @@ export const ZernioAdapter = {
       console.warn(`Search failed for ${platform}: ${e.message}`);
       return [];
     }
+  },
+
+  /**
+   * Fetch absolute contact list for a profile/platform
+   */
+  fetchContacts: async (profileId: string, platform?: string) => {
+    try {
+      const response = await axios.get(`${ZERNIO_API_URL}/contacts`, {
+        params: { profileId, platform },
+        headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
+      });
+      return response.data.contacts || [];
+    } catch (e: any) {
+      console.error(`Zernio Contacts Fetch Error: ${e.message}`);
+      return [];
+    }
   }
 };

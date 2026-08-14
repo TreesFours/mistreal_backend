@@ -136,4 +136,39 @@ IntelligenceBuffer.init({
     tableName: 'IntelligenceBuffers'
 });
 
+/**
+ * 📨 SOCIAL EVENT MODEL
+ * Stores messages, comments, and posts from webhooks.
+ */
+export class SocialEvent extends Model {
+    public id!: number;
+    public deviceId!: string;
+    public platform!: string;
+    public type!: string; // 'message', 'comment', 'mention', 'post'
+    public externalId!: string; // Platform's own ID
+    public senderId!: string;
+    public senderName!: string;
+    public content!: string;
+    public metadata!: any; // JSON for attachments, etc.
+    public timestamp!: Date;
+    public isRead!: boolean;
+}
+
+SocialEvent.init({
+    deviceId: { type: DataTypes.STRING, allowNull: false },
+    platform: { type: DataTypes.STRING, allowNull: false },
+    type: { type: DataTypes.STRING, allowNull: false },
+    externalId: { type: DataTypes.STRING, allowNull: false },
+    senderId: { type: DataTypes.STRING, allowNull: true },
+    senderName: { type: DataTypes.STRING, allowNull: true },
+    content: { type: DataTypes.TEXT, allowNull: true },
+    metadata: { type: DataTypes.JSONB, defaultValue: {} },
+    timestamp: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
+    isRead: { type: DataTypes.BOOLEAN, defaultValue: false }
+}, {
+    sequelize,
+    modelName: 'SocialEvent',
+    tableName: 'SocialEvents'
+});
+
 export { sequelize };
