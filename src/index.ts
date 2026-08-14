@@ -10,8 +10,9 @@ import { getSocialSummary, createConnectSession, sendSocialAction } from './serv
 import { createSubscriptionSession, handleWebhook } from './services/stripeService';
 import { getNewsData } from './services/newsService';
 import { getWeatherData } from './services/weatherService';
-import { getDetailedAstroData } from './services/astroService';
-import { User, DelayedAction } from './models/userModel';
+import { getDetailedAstroData, getJplVectorData } from './services/astroService';
+import { IntelligenceService } from './services/intelligenceService';
+import { User, DelayedAction, IntelligenceBuffer } from './models/userModel';
 import { SocialToken } from './models/SocialToken';
 import { sequelize } from './db';
 import { verifyPurchase } from './services/googlePlayService';
@@ -129,21 +130,52 @@ app.post('/api/subscribe', async (req: any, res: any) => {
 
 // 🌦️ Intelligence Feed
 app.get('/api/weather', async (req, res) => {
-    const { lat, lon } = req.query;
+    const { lat, lon, deviceId } = req.query;
+
+    // Proactive Cache Lookup
+    if (deviceId) {
+        const user = await getOrCreateUserInternal(deviceId as string);
+        if (user && user.lastWeatherSummary && user.lastLocationUpdate) {
+            const lastUpdate = new Date(user.lastLocationUpdate).getTime();
+            const now = new Date().getTime();
+            // If cache is younger than 30 mins, serve it
+            if (now - lastUpdate < 30 * 60 * 1000) {
+                return res.json({
+                    summary: user.lastWeatherSummary,
+                    location: user.lastKnownCity,
+                    rainExpected: false, // Could be parsed from summary
+                    timeToRain: null
+                });
+            }
+        }
+    }
+
     const weather: any = await getWeatherData(Number(lat), Number(lon));
+
+    // Update User Cache if possible
+    if (deviceId && weather.summary !== "Weather unavailable") {
+        const user = await getOrCreateUserInternal(deviceId as string);
+        if (user) {
+            user.lastKnownLat = Number(lat);
+            user.lastKnownLon = Number(lon);
+            user.lastWeatherSummary = weather.summary;
+            user.lastKnownCity = weather.location;
+            user.lastLocationUpdate = new Date();
+            await user.save();
+        }
+    }
 
     // Add Astro Summary to weather response for the top card
     try {
         const astroData = await getDetailedAstroData();
         if (astroData.length > 0) {
             const description = astroData[0].description;
-            // Extract moon phase and planets from description string
             const moonMatch = description.match(/Moon phase: (.*)\. Notable/);
             const planetMatch = description.match(/Notable planetary positions: (.*)\./);
 
             weather.moonPhase = moonMatch ? moonMatch[1] : "Updating...";
             weather.planets = planetMatch ? planetMatch[1] : "Calculating...";
-            weather.moonImageUrl = astroData[0].url; // Pass through the AstronomyAPI sketch URL
+            weather.moonImageUrl = astroData[0].url;
         }
     } catch (e) {}
 
@@ -151,9 +183,34 @@ app.get('/api/weather', async (req, res) => {
 });
 
 app.get('/api/news', async (req, res) => {
-    const { category, country, location } = req.query;
-    const news = await getNewsData(category as string, (country || location) as string);
-    res.json(news);
+    // Use the Rolling Buffer instead of on-demand fetching
+    const news = await IntelligenceService.getGlobalFeed();
+    res.json({ articles: news });
+});
+
+// 📍 Location Update Endpoint
+app.post('/api/user/location', async (req, res) => {
+    const { deviceId, lat, lon } = req.body;
+    if (!deviceId || lat === undefined || lon === undefined) {
+        return res.status(400).json({ success: false, error: 'deviceId, lat, and lon required' });
+    }
+    const user = await getOrCreateUserInternal(deviceId);
+    if (user) {
+        user.lastKnownLat = Number(lat);
+        user.lastKnownLon = Number(lon);
+        user.lastLocationUpdate = new Date();
+        await user.save();
+
+        // Trigger immediate proactive refresh for this specific user
+        const weather = await getWeatherData(user.lastKnownLat, user.lastKnownLon);
+        user.lastWeatherSummary = weather.summary;
+        user.lastKnownCity = weather.location;
+        await user.save();
+
+        res.json({ success: true, location: user.lastKnownCity });
+    } else {
+        res.status(404).json({ success: false, error: 'User not found' });
+    }
 });
 
 // 💰 Verification
@@ -182,22 +239,67 @@ app.get('/api/celestial/vectors', async (req, res) => {
     const { getJplVectorData } = require('./services/astroService');
     const data = await getJplVectorData(String(bodyId));
 
-    if (data) {
-        // Simple extraction logic for the response
-        // In reality, JPL returns a complex object, we'll simplify it for the app
+    if (data && data.result) {
+        // Parse JPL Horizons response to extract relative orientation
+        // Strategy: Use the most recent vector to determine azimuth/elevation
+        const lines = data.result.split('\n');
+        let x = 0, y = 0, z = 0;
+
+        for (let i = 0; i < lines.length; i++) {
+            if (lines[i].includes('$$SOE')) {
+                const vectorLine = lines[i+1]; // Line after start of ephemeris
+                const parts = vectorLine.trim().split(/\s+/);
+                // JPL Vector format: [JulianDate, X, Y, Z, VX, VY, VZ]
+                x = parseFloat(parts[1]) || 0;
+                y = parseFloat(parts[2]) || 0;
+                z = parseFloat(parts[3]) || 0;
+                break;
+            }
+        }
+
+        // Convert Cartesian to Horizontal Coordinates (Approximate for list display)
+        const azimuth = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+        const elevation = Math.atan2(z, Math.sqrt(x*x + y*y)) * 180 / Math.PI;
+
+        const orientation = getCompassDirection(azimuth);
+
         res.json({
             success: true,
             body: bodyId,
-            x: Math.random() * 500 - 250, // Simplified for 2D mapping
-            y: Math.random() * 500 - 250,
-            z: 0
+            azimuth,
+            elevation,
+            orientation,
+            status: elevation > 0 ? "Visible" : "Below Horizon"
         });
     } else {
         res.status(500).json({ success: false, error: 'JPL Data unavailable' });
     }
 });
 
-// ⏳ Background Worker
+function getCompassDirection(bearing: number): string {
+    const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+    const index = Math.round(bearing / 45) % 8;
+    return directions[index];
+}
+
+// ⏳ Background Worker: Intelligence Engine
+setInterval(async () => {
+    try {
+        await IntelligenceService.refreshGlobalIntel();
+    } catch (e) {
+        console.error('❌ Global Intel Worker Error:', e);
+    }
+}, 60 * 60 * 1000); // Hourly
+
+setInterval(async () => {
+    try {
+        await IntelligenceService.refreshProactiveWeather();
+    } catch (e) {
+        console.error('❌ Proactive Weather Worker Error:', e);
+    }
+}, 30 * 60 * 1000); // Every 30 mins
+
+// ⏳ Background Worker: Delayed Social Actions
 setInterval(async () => {
     if (!DATABASE_URL) return;
     try {

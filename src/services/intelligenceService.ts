@@ -1,124 +1,176 @@
 import axios from 'axios';
+import { Op } from 'sequelize';
 import logger from '../utils/logger';
+import { IntelligenceBuffer, User } from '../models/userModel';
+import { getWeatherData } from './weatherService';
 
-// Caching layer for different frequencies
-const cache: { [key: string]: { data: any, timestamp: number } } = {};
+/**
+ * 🛰️ STRATEGIC INTELLIGENCE SERVICE
+ * Implements the "Rolling 15 Flow" and "Proactive Weather" logic.
+ */
+export class IntelligenceService {
 
-const getCachedOrFetch = async (key: string, fetchFn: () => Promise<any>, ttlMs: number) => {
-    const now = Date.now();
-    if (cache[key] && (now - cache[key].timestamp) < ttlMs) {
-        return cache[key].data;
-    }
-    const data = await fetchFn();
-    cache[key] = { data, timestamp: now };
-    return data;
-};
-
-export const getAstroData = async () => {
-    const nasaKey = process.env.NASA_API_KEY;
-    if (!nasaKey) return [];
-
-    return getCachedOrFetch('nasa_apod', async () => {
+    /**
+     * Updates a specific intelligence category buffer.
+     * Capped at 15 items. Newest first.
+     */
+    private static async updateBuffer(category: string, newItems: any[]) {
         try {
-            const response = await axios.get('https://api.nasa.gov/planetary/apod', {
-                params: { api_key: nasaKey }
+            const [buffer] = await IntelligenceBuffer.findOrCreate({
+                where: { category },
+                defaults: { category, items: [] }
             });
-            return [{
-                title: `[Astro] ${response.data.title}`,
-                description: response.data.explanation,
-                url: response.data.url,
-                source: 'NASA',
-                timestamp: new Date().toISOString()
-            }];
-        } catch (e) { return []; }
-    }, 24 * 60 * 60 * 1000); // 1 Day TTL
-};
 
-export const getWikipediaDeepDive = async () => {
-    return getCachedOrFetch('wiki_daily', async () => {
-        try {
-            const response = await axios.get('https://en.wikipedia.org/api/rest_v1/page/random/summary');
-            return [{
-                title: `[Deep Dive] ${response.data.title}`,
-                description: response.data.extract,
-                url: response.data.content_urls.desktop.page,
-                source: 'Wikipedia',
-                timestamp: new Date().toISOString()
-            }];
-        } catch (e) { return []; }
-    }, 24 * 60 * 60 * 1000); // 1 Day TTL
-};
+            const currentItems = buffer.items || [];
 
-export const getSportsData = async () => {
-    const apiKey = process.env.NEWS_API_KEY;
-    if (!apiKey) return [];
+            // Add new items, filtering out duplicates by title
+            const uniqueNewItems = newItems.filter(newItem =>
+                !currentItems.some((existing: any) => existing.title === newItem.title)
+            );
 
-    // Updates every hour
-    return getCachedOrFetch('sports_hourly', async () => {
+            if (uniqueNewItems.length === 0) return;
+
+            // Prepend new items and truncate to 15
+            const updatedItems = [...uniqueNewItems, ...currentItems].slice(0, 15);
+
+            buffer.items = updatedItems;
+            buffer.lastUpdated = new Date();
+            await buffer.save();
+
+            logger.info(`🔄 [Intel] Buffer updated: ${category} (+${uniqueNewItems.length} items)`);
+        } catch (e: any) {
+            logger.error(`❌ Buffer Update Error (${category}): ${e.message}`);
+        }
+    }
+
+    /**
+     * GLOBAL ROLLING ENGINE
+     * Triggered by cron or background worker.
+     */
+    static async refreshGlobalIntel() {
+        logger.info('🚀 Starting Global Intelligence Refresh...');
+
+        // 1. News (Hourly)
+        await this.refreshNews();
+
+        // 2. Entertainment (Hourly)
+        await this.refreshEntertainment();
+
+        // 3. NASA APOD (Daily)
+        await this.refreshAstro();
+
+        // 4. Novels (Daily)
+        await this.refreshLiterature();
+    }
+
+    private static async refreshNews() {
+        const apiKey = process.env.NEWS_API_KEY;
+        if (!apiKey) return;
+
         try {
             const response = await axios.get(`https://newsapi.org/v2/top-headlines`, {
-                params: { category: 'sports', country: 'us', apiKey }
+                params: { category: 'general', country: 'us', apiKey }
             });
-            return response.data.articles.slice(0, 5).map((a: any) => ({
-                title: `[Sports] ${a.title}`,
+            const articles = response.data.articles.map((a: any) => ({
+                title: a.title,
                 description: a.description,
                 url: a.url,
-                source: 'Sports',
+                source: 'News',
                 timestamp: a.publishedAt || new Date().toISOString()
             }));
-        } catch (e) { return []; }
-    }, 60 * 60 * 1000);
-};
+            await this.updateBuffer('news', articles);
+        } catch (e) {}
+    }
 
-export const getMovieIntelligence = async () => {
-    const tmdbKey = process.env.TMDB_API_KEY;
-    if (!tmdbKey) return [];
+    private static async refreshEntertainment() {
+        const tmdbKey = process.env.TMDB_API_KEY;
+        if (!tmdbKey) return;
 
-    // Updates every hour
-    return getCachedOrFetch('movies_hourly', async () => {
         try {
             const response = await axios.get('https://api.themoviedb.org/3/movie/now_playing', {
                 params: { api_key: tmdbKey }
             });
-            return response.data.results.slice(0, 3).map((m: any) => ({
+            const movies = response.data.results.map((m: any) => ({
                 title: `[Movie] ${m.title}`,
                 description: m.overview,
                 url: `https://www.themoviedb.org/movie/${m.id}`,
                 source: 'TMDB',
                 timestamp: new Date().toISOString()
             }));
-        } catch (e) { return []; }
-    }, 60 * 60 * 1000);
-};
+            await this.updateBuffer('entertainment', movies);
+        } catch (e) {}
+    }
 
-export const getNovelIntelligence = async () => {
-    // Updates once a day
-    return getCachedOrFetch('novels_daily', async () => {
+    private static async refreshAstro() {
+        const nasaKey = process.env.NASA_API_KEY;
+        if (!nasaKey) return;
+
+        try {
+            const response = await axios.get('https://api.nasa.gov/planetary/apod', {
+                params: { api_key: nasaKey }
+            });
+            const apod = [{
+                title: `[Astro] ${response.data.title}`,
+                description: response.data.explanation,
+                url: response.data.url,
+                source: 'NASA',
+                timestamp: new Date().toISOString()
+            }];
+            await this.updateBuffer('astro', apod);
+        } catch (e) {}
+    }
+
+    private static async refreshLiterature() {
         try {
             const response = await axios.get('https://openlibrary.org/trending/daily.json');
-            return response.data.works.slice(0, 3).map((w: any) => ({
+            const novels = response.data.works.map((w: any) => ({
                 title: `[Novel] ${w.title}`,
                 description: `Author: ${w.author_name?.join(', ') || 'Unknown'}. A trending piece in literature.`,
                 url: `https://openlibrary.org${w.key}`,
                 source: 'OpenLibrary',
                 timestamp: new Date().toISOString()
             }));
-        } catch (e) { return []; }
-    }, 24 * 60 * 60 * 1000);
-};
+            await this.updateBuffer('novels', novels);
+        } catch (e) {}
+    }
 
-export const getJournalIntelligence = async () => {
-    // Updates once a week
-    return getCachedOrFetch('journals_weekly', async () => {
-        try {
-            // Using a journals/academic API or RSS feed (Simulated with high-quality source)
-            return [{
-                title: "[Journal] Quantum Computing: Strategic Advantages in Encryption",
-                description: "This week's deep dive into emerging defense technologies and high-level cryptography.",
-                url: "https://arxiv.org/list/quant-ph/recent",
-                source: "Academic Journals",
-                timestamp: new Date().toISOString()
-            }];
-        } catch (e) { return []; }
-    }, 7 * 24 * 60 * 60 * 1000);
-};
+    /**
+     * PROACTIVE WEATHER ENGINE
+     * Refreshes weather for all active users based on their last known location.
+     */
+    static async refreshProactiveWeather() {
+        logger.info('🌦️ Refreshing proactive weather for active users...');
+        const activeUsers = await User.findAll({
+            where: {
+                lastKnownLat: { [Op.ne]: null }
+            }
+        });
+
+        for (const user of activeUsers) {
+            if (user.lastKnownLat && user.lastKnownLon) {
+                try {
+                    const weather = await getWeatherData(user.lastKnownLat, user.lastKnownLon);
+                    user.lastWeatherSummary = weather.summary;
+                    user.lastKnownCity = weather.location;
+                    user.lastLocationUpdate = new Date();
+                    await user.save();
+                } catch (e) {}
+            }
+        }
+    }
+
+    /**
+     * Returns the consolidated feed for the app.
+     */
+    static async getGlobalFeed() {
+        const buffers = await IntelligenceBuffer.findAll();
+        let allItems: any[] = [];
+
+        buffers.forEach(buffer => {
+            allItems = [...allItems, ...(buffer.items || [])];
+        });
+
+        // Sort by timestamp newest first
+        return allItems.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    }
+}

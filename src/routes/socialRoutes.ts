@@ -300,7 +300,17 @@ router.get('/contacts', authenticateUser, async (req: Request, res: Response) =>
     const user = await getResolvedUser(req);
     if (!user || !user.zernioProfileId) return res.json({ success: true, contacts: [] });
 
-    const { platform } = req.query;
+    const { platform, search } = req.query;
+
+    // 🔍 Search Discovery Mode
+    if (search && platform) {
+        logger.info(`🔍 Searching ${platform} for: ${search}`);
+        // Strategy: Query Zernio's discovery/search endpoint for the platform
+        // For now, we fetch inbox and filter, but a real app would hit Zernio search API.
+        const results = await ZernioAdapter.searchPlatform(user.zernioProfileId, String(platform), String(search));
+        return res.json({ success: true, contacts: results });
+    }
+
     const inbox = await ZernioAdapter.fetchInbox(user.zernioProfileId);
 
     // Extract unique contacts from inbox

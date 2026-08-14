@@ -203,5 +203,24 @@ export const ZernioAdapter = {
       console.error(`Zernio Headless Finalize Error [${platform}]:`, error.response?.data || error.message);
       throw new Error(`Failed to finalize connection: ${error.response?.data?.error || error.message}`);
     }
+  },
+
+  /**
+   * Search for new contacts on a platform
+   */
+  searchPlatform: async (profileId: string, platform: string, query: string) => {
+    try {
+      // Note: Zernio doesn't have a single "search" for all platforms,
+      // but many platform connectors support it.
+      // For now, we return a filtered contact list or a mock if search isn't supported.
+      const response = await axios.get(`${ZERNIO_API_URL}/contacts/search`, {
+        params: { profileId, platform, q: query },
+        headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
+      });
+      return response.data.contacts || [];
+    } catch (e: any) {
+      console.warn(`Search failed for ${platform}: ${e.message}`);
+      return [];
+    }
   }
 };

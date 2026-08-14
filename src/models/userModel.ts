@@ -23,6 +23,13 @@ export class User extends Model {
     public unreadMessagesCount!: number;
     public zernioProfileId!: string | null; // Added for official Zernio SDK flow
 
+    // 📍 Proactive Intelligence Fields
+    public lastKnownLat!: number | null;
+    public lastKnownLon!: number | null;
+    public lastKnownCity!: string | null;
+    public lastWeatherSummary!: string | null;
+    public lastLocationUpdate!: Date | null;
+
     // Platform-specific OAuth tokens
     public twitterAccessToken!: string | null;
     public twitterRefreshToken!: string | null;
@@ -57,6 +64,13 @@ User.init({
     connectedPlatforms: { type: DataTypes.ARRAY(DataTypes.STRING), defaultValue: [] },
     unreadMessagesCount: { type: DataTypes.INTEGER, defaultValue: 0 },
     zernioProfileId: { type: DataTypes.STRING, allowNull: true },
+
+    // 📍 Proactive Intelligence Fields
+    lastKnownLat: { type: DataTypes.FLOAT, allowNull: true },
+    lastKnownLon: { type: DataTypes.FLOAT, allowNull: true },
+    lastKnownCity: { type: DataTypes.STRING, allowNull: true },
+    lastWeatherSummary: { type: DataTypes.TEXT, allowNull: true },
+    lastLocationUpdate: { type: DataTypes.DATE, allowNull: true },
 
     // Platform-specific OAuth tokens
     twitterAccessToken: { type: DataTypes.TEXT, allowNull: true },
@@ -99,6 +113,27 @@ DelayedAction.init({
     sequelize,
     modelName: 'DelayedAction',
     tableName: 'DelayedActions'
+});
+
+/**
+ * 🛰️ INTELLIGENCE BUFFER MODEL
+ * Stores the rolling 15 items per category.
+ */
+export class IntelligenceBuffer extends Model {
+    public id!: number;
+    public category!: string; // 'news', 'movies', 'novels', 'journals', 'astro'
+    public items!: any; // JSON array of 15 items
+    public lastUpdated!: Date;
+}
+
+IntelligenceBuffer.init({
+    category: { type: DataTypes.STRING, allowNull: false, unique: true },
+    items: { type: DataTypes.JSONB, defaultValue: [] },
+    lastUpdated: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
+}, {
+    sequelize,
+    modelName: 'IntelligenceBuffer',
+    tableName: 'IntelligenceBuffers'
 });
 
 export { sequelize };
