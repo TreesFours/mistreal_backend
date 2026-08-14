@@ -8,7 +8,6 @@ import { Op } from 'sequelize';
 import { getAiResponse, getAvailableModels, extractImageData, extractAudioData } from './services/aiService';
 import { getSocialSummary, createConnectSession, sendSocialAction } from './services/socialService';
 import { createSubscriptionSession, handleWebhook } from './services/stripeService';
-import { getNewsData } from './services/newsService';
 import { getWeatherData } from './services/weatherService';
 import { getDetailedAstroData, getJplVectorData } from './services/astroService';
 import { IntelligenceService } from './services/intelligenceService';
