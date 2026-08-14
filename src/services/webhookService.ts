@@ -36,43 +36,47 @@ export class WebhookService {
      * Ensures database integrity using Transactions.
      */
     static async handleEvent(event: any) {
-        const { type, data, platform, user_token, profile_id } = event;
+        // 🛡️ ADAPTIVE PAYLOAD RESOLUTION
+        // Support both Zernio standard and "Late" (internal engine) payload shapes
+        const type = event.event || event.type;
+        const data = event.data || event.account || event.message || event.comment;
+        const platform = event.platform || data?.platform;
 
-        logger.info(`📨 [ZERNIO] Processing ${type} on ${platform}`);
+        // Profile ID can be profile_id or profileId (nested or flat)
+        const profileId = event.profile_id || event.profileId || data?.profileId || data?.profile_id;
+
+        logger.info(`📨 [ZERNIO WEBHOOK] Type: ${type} | Platform: ${platform} | Profile: ${profileId}`);
+        logger.debug(`📄 [RAW PAYLOAD]: ${JSON.stringify(event)}`);
 
         // Use a transaction to ensure all metadata updates happen atomically
         const transaction = await sequelize.transaction();
 
         try {
             // 🛡️ SECURITY: Strict Multi-Tenant Lookup
-            // We search exclusively by profile_id to ensure the event belongs to the correct tenant.
-            // Zernio guarantees profile_id is present for all multi-tenant events.
             const user = await User.findOne({
-                where: { zernioProfileId: profile_id || 'NOT_FOUND' },
+                where: { zernioProfileId: profileId || 'NOT_FOUND' },
                 transaction
             });
 
             if (!user) {
-                logger.warn(`⚠️ Security Alert: Unauthorized or Orphaned Zernio Webhook for profile_id: ${profile_id}`);
+                logger.warn(`⚠️ [ZERNIO] Unauthorized or Orphaned Webhook for profile_id: ${profileId}. Ensure this profileId is mapped to a user in our DB.`);
                 await transaction.rollback();
                 return;
             }
 
+            logger.info(`👤 [ZERNIO] Event belongs to User: ${user.deviceId} (${user.userName || 'No Name'})`);
+
             switch (type) {
                 case 'message.received':
+                case 'message.created':
                     await this.handleIncomingMessage(user, data, platform, transaction);
                     break;
                 case 'message.read':
                     await this.handleMessageRead(user, data, platform, transaction);
                     break;
                 case 'comment.received':
+                case 'comment.created':
                     await this.handleCommentReceived(user, data, platform, transaction);
-                    break;
-                case 'call.received':
-                    await this.handleIncomingCall(user, data, platform, transaction);
-                    break;
-                case 'call.ended':
-                    await this.handleCallEnded(user, data, platform, transaction);
                     break;
                 case 'account.connected':
                     await this.handleAccountConnected(user, data, platform, transaction);
@@ -86,11 +90,7 @@ export class WebhookService {
                 case 'message.sent':
                     await this.handleMessageSent(user, data, platform, transaction);
                     break;
-                case 'whatsapp.template.status_updated':
-                    await this.handleWhatsAppTemplateUpdate(user, data, transaction);
-                    break;
                 default:
-                    // Future-proofing: Unknown events logged for AI pattern matching
                     logger.debug(`ℹ️ Passive event ${type} logged for device ${user.deviceId}.`);
             }
 

@@ -479,12 +479,15 @@ router.post('/disconnect/:platform', authenticateUser, async (req: Request, res:
  * URL: https://mistreal-backend.onrender.com/api/social/webhook
  */
 router.post('/webhook', async (req: Request, res: Response) => {
-    const signature = req.headers['x-zernio-signature'] as string;
+    // 🛡️ Support both X-Zernio-Signature and X-Late-Signature conventions
+    const signature = (req.headers['x-zernio-signature'] || req.headers['x-late-signature']) as string;
     const payload = JSON.stringify(req.body);
 
     // 1. Verify Security (If secret is configured)
     if (process.env.ZERNIO_WEBHOOK_SECRET && !WebhookService.verifySignature(payload, signature)) {
         logger.warn('🚫 Invalid Webhook Signature rejected.');
+        // Log headers for debugging
+        logger.debug(`[WEBHOOK HEADERS]: ${JSON.stringify(req.headers)}`);
         return res.status(401).send('Invalid Signature');
     }
 
@@ -492,7 +495,13 @@ router.post('/webhook', async (req: Request, res: Response) => {
     res.status(200).send('OK');
 
     // 3. Process Event Asynchronously
-    WebhookService.handleEvent(req.body).catch(err => {
+    // Inject event type from header if missing in body
+    const eventBody = { ...req.body };
+    if (!eventBody.event && req.headers['x-late-event']) {
+        eventBody.event = req.headers['x-late-event'];
+    }
+
+    WebhookService.handleEvent(eventBody).catch(err => {
         logger.error(`❌ Webhook Orchestration Error: ${err.message}`);
     });
 });

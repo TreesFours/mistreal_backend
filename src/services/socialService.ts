@@ -35,26 +35,35 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
 
         // 🚰 HYDRATION: If DB is empty, do a one-time sync from Zernio
         if (items.length === 0 && user.zernioProfileId) {
-            console.info(`🚰 Hydrating Social Cache for Profile: ${user.zernioProfileId}`);
-            const inboxItems = await ZernioAdapter.fetchInbox(user.zernioProfileId);
+            console.info(`🚰 [SYNC] DB empty. Hydrating from Zernio for Profile: ${user.zernioProfileId}`);
+            try {
+                const inboxItems = await ZernioAdapter.fetchInbox(user.zernioProfileId);
+                console.info(`📥 [SYNC] Zernio returned ${inboxItems.length} items for Profile ${user.zernioProfileId}`);
 
-            for (const it of inboxItems) {
-                await SocialEvent.findOrCreate({
-                    where: { externalId: it._id || it.id },
-                    defaults: {
-                        deviceId: user.deviceId,
-                        platform: it.platform.toLowerCase(),
-                        type: 'message',
-                        externalId: it._id || it.id,
-                        senderId: it.author?.id,
-                        senderName: it.author?.name || 'Social Contact',
-                        content: it.content?.text || it.content?.body || "",
-                        metadata: it.metadata || {},
-                        timestamp: it.createdAt || new Date()
-                    }
-                });
+                if (inboxItems.length > 0) {
+                    console.debug(`📄 [SYNC SAMPLE]: ${JSON.stringify(inboxItems[0])}`);
+                }
+
+                for (const it of inboxItems) {
+                    await SocialEvent.findOrCreate({
+                        where: { externalId: it._id || it.id },
+                        defaults: {
+                            deviceId: user.deviceId,
+                            platform: it.platform.toLowerCase(),
+                            type: 'message',
+                            externalId: it._id || it.id,
+                            senderId: it.author?.id,
+                            senderName: it.author?.name || 'Social Contact',
+                            content: it.content?.text || it.content?.body || "",
+                            metadata: it.metadata || {},
+                            timestamp: it.createdAt || new Date()
+                        }
+                    });
+                }
+                items = inboxItems;
+            } catch (fetchError: any) {
+                console.error(`❌ [SYNC] Zernio Fetch Failed: ${fetchError.message}`);
             }
-            items = inboxItems;
         }
 
         const filteredItems = isPro ? items : items.filter((i: any) =>
