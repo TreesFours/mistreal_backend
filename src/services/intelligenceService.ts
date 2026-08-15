@@ -161,6 +161,7 @@ export class IntelligenceService {
 
     /**
      * Returns the consolidated feed for the app.
+     * 🕒 INTERLEAVED & RANDOMIZED FLOW
      */
     static async getGlobalFeed() {
         const buffers = await IntelligenceBuffer.findAll();
@@ -170,7 +171,19 @@ export class IntelligenceService {
             allItems = [...allItems, ...(buffer.items || [])];
         });
 
-        // Sort by timestamp newest first
-        return allItems.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        // 🌪️ STRATEGIC MIXING:
+        // 1. Sort by date (descending) to ensure latest is always near top
+        // 2. Add a tiny bit of random jitter within items of same hour to keep it fresh
+        return allItems.sort((a, b) => {
+            const timeA = new Date(a.timestamp).getTime();
+            const timeB = new Date(b.timestamp).getTime();
+
+            // If they are from the same hour, randomize thier relative position
+            if (Math.abs(timeA - timeB) < 3600000) {
+                return 0.5 - Math.random();
+            }
+
+            return timeB - timeA;
+        });
     }
 }
