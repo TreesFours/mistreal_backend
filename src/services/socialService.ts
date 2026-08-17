@@ -93,13 +93,19 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
 
         const posts = filteredItems.map((it: any) => {
             const def = getPlatformDefinition(it.platform);
+
+            // Extract image from attachments if available
+            const imageUrl = it.content?.attachments?.find((a: any) => a.type === 'image')?.url ||
+                             it.metadata?.attachments?.find((a: any) => a.type === 'image')?.url;
+
             return {
-                id: it._id,
+                id: it._id || it.id,
                 platform: it.platform,
-                author: it.author?.name || 'Social Contact',
+                author: it.author?.name || it.author?.handle || 'Social Contact',
                 content: it.content?.text || it.content?.body || '',
-                timestamp: it.createdAt,
-                sourceUrl: it.source_url || null,
+                timestamp: it.createdAt || it.timestamp || new Date().toISOString(),
+                imageUrl: imageUrl || null,
+                sourceUrl: it.source_url || it.url || null,
                 platformIcon: def?.icon || '🔗',
                 platformColor: def?.color || '#888',
                 platformDisplayName: def?.displayName || it.platform
@@ -180,6 +186,24 @@ export const exchangeOAuthCode = async (deviceId: string, platform: string, code
 
     await user.save();
     console.log(`✅ ${normalizedPlatform} persistence confirmed for device ${deviceId}`);
+};
+
+export const disconnectPlatform = async (deviceId: string, platform: string) => {
+    try {
+        const user = await User.findOne({ where: { deviceId } });
+        if (!user) return { success: false, error: 'User not found' };
+
+        const connected = user.connectedPlatforms || [];
+        user.set('connectedPlatforms', connected.filter(p => p.toLowerCase() !== platform.toLowerCase()));
+        user.changed('connectedPlatforms', true);
+
+        // Also clear profileId if it was a critical failure? No, usually keep it for reconnections.
+
+        await user.save();
+        return { success: true, platform, message: `${platform} disconnected` };
+    } catch (e: any) {
+        throw new Error(`Disconnect failed: ${e.message}`);
+    }
 };
 
 export const sendSocialAction = async (user: User, action: { platform: string, type: string, content: string, targetId?: string }) => {

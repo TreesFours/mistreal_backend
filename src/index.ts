@@ -47,8 +47,8 @@ const initDb = async () => {
             await sequelize.sync({ alter: true });
             console.log('✅ DB Initialized');
         } catch (err: any) {
-            console.error('❌ DB Init Failed:', err.message);
-            await sequelize.sync();
+            console.error('❌ DB Init Failed (Non-Critical):', err.message);
+            // DO NOT throw error to allow server to start in emergency mode
         }
     }
 };
@@ -323,11 +323,15 @@ app.use((req, res) => {
 initDb().then(async () => {
     // 🚀 BOOTSTRAP: Fill intelligence buffers immediately on start
     try {
-        await IntelligenceService.refreshGlobalIntel();
+        console.log('🚀 Triggering Intelligence Bootstrap...');
+        await IntelligenceService.refreshGlobalIntel().catch(e => console.error('Intel Buffer Error:', e.message));
         console.log('✅ Intelligence Engine Bootstrapped');
-    } catch (e) {
-        console.error('⚠️ Intel Bootstrap failed:', e);
+    } catch (e: any) {
+        console.error('⚠️ Intel Bootstrap failed:', e.message);
     }
 
     app.listen(port, () => { console.log(`🚀 Server Running on Port ${port}`); });
+}).catch(err => {
+    console.error('CRITICAL: Boot process failed:', err.message);
+    app.listen(port, () => { console.log(`🚀 Emergency Mode: Server Running on Port ${port}`); });
 });

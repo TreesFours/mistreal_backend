@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { Op } from 'sequelize';
 import { UnifiedSocialService } from '../services/socialPlatforms/unified';
-import { createConnectSession, getAvailablePlatforms, sendSocialAction, exchangeOAuthCode } from '../services/socialService';
+import { createConnectSession, getAvailablePlatforms, sendSocialAction, exchangeOAuthCode, disconnectPlatform } from '../services/socialService';
 import { ZernioAdapter } from '../services/socialPlatforms/zernioAdapter';
 import { User, SocialEvent } from '../models/userModel';
 import { WebhookService } from '../services/webhookService';
@@ -462,12 +462,10 @@ router.post('/disconnect/:platform', authenticateUser, async (req: Request, res:
     const user = await getResolvedUser(req);
     const { platform } = req.params;
 
-    if (user) {
-        const platforms = user.connectedPlatforms || [];
-        user.connectedPlatforms = platforms.filter(p => p.toLowerCase() !== platform.toLowerCase());
-        await user.save();
-    }
-    res.json({ success: true, platform, message: `${platform} disconnected` });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const result = await disconnectPlatform(user.deviceId, platform);
+    res.json(result);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
