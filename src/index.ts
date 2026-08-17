@@ -43,12 +43,17 @@ const getOrCreateUserInternal = async (deviceId: string) => {
 const initDb = async () => {
     if (DATABASE_URL) {
         try {
+            // Set Node DNS to prefer IPv4 (Fixes ENETUNREACH on Render)
+            const dns = require('dns');
+            if (dns.setDefaultResultOrder) {
+                dns.setDefaultResultOrder('ipv4first');
+            }
+
             await sequelize.authenticate();
             await sequelize.sync({ alter: true });
             console.log('✅ DB Initialized');
         } catch (err: any) {
-            console.error('❌ DB Init Failed (Non-Critical):', err.message);
-            // DO NOT throw error to allow server to start in emergency mode
+            console.error('❌ DB Init Failed:', err.message);
         }
     }
 };

@@ -11,8 +11,9 @@ const sequelize = new Sequelize(process.env.DATABASE_URL!, {
             require: true,
             rejectUnauthorized: false
         },
-        connectTimeout: 60000 // 60 seconds
+        connectTimeout: 60000
     },
+    // 🛡️ CRITICAL: Force IPv4 to prevent ENETUNREACH on Render/Supabase
     pool: {
         max: 5,
         min: 0,
