@@ -1,3 +1,13 @@
+/** 🛡️ AI SYSTEM PROTOCOL 🛡️
+ * SOURCE OF TRUTH: master_system_map.artifact.md
+ *
+ * 🚀 FUNCTIONAL PIPELINE:
+ * [Input]  <- Mobile App API requests (Chat, Social Sync, Weather, Map Data)
+ * [Process] <- Orchestrates AI services, Social APIs, Stripe, and Intelligence Buffers
+ * [Output] -> JSON responses to Frontend; persists location and social state in DB
+ *
+ * ⚠️ MANDATORY: Never delete history. Only ADD updates/fixes to the Master Map table.
+ */
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -11,6 +21,7 @@ import { createSubscriptionSession, handleWebhook } from './services/stripeServi
 import { getWeatherData } from './services/weatherService';
 import { getDetailedAstroData, getJplVectorData } from './services/astroService';
 import { IntelligenceService } from './services/intelligenceService';
+import { getNearbyPlaces } from './services/discoveryService';
 import { User, DelayedAction, IntelligenceBuffer } from './models/userModel';
 import { SocialToken } from './models/SocialToken';
 import { sequelize } from './db';
@@ -96,6 +107,8 @@ app.post('/api/chat', upload.fields([{ name: 'images', maxCount: 5 }, { name: 'a
     }
 
     const response = await getAiResponse(enhancedPrompt, provider || 'gemini-1.5-flash', history || [], user, imageDatas, audioData);
+
+    // 🛡️ AI NOTE: If you overhaul or fix logic here, log it in the "History & Notes" column of the Master Map.
     res.json(response);
 });
 
@@ -190,6 +203,22 @@ app.get('/api/news', async (req, res) => {
     // Use the Rolling Buffer instead of on-demand fetching
     const news = await IntelligenceService.getGlobalFeed();
     res.json({ articles: news });
+});
+
+// 🔎 Nearby Discovery (real OSM points of interest, radius-aware)
+app.get('/api/discovery/nearby', async (req, res) => {
+    const { lat, lon, radius, category } = req.query;
+    if (lat === undefined || lon === undefined || !category) {
+        return res.status(400).json({ success: false, error: 'lat, lon, and category are required' });
+    }
+
+    const results = await getNearbyPlaces(
+        Number(lat),
+        Number(lon),
+        radius !== undefined ? Number(radius) : 1000,
+        String(category)
+    );
+    res.json({ results });
 });
 
 // 📍 Location Update Endpoint
@@ -340,3 +369,5 @@ initDb().then(async () => {
     console.error('CRITICAL: Boot process failed:', err.message);
     app.listen(port, () => { console.log(`🚀 Emergency Mode: Server Running on Port ${port}`); });
 });
+
+// 🛡️ AI CHECKPOINT: Did you update the Master System Map? If not, do it now.

@@ -179,12 +179,13 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
         - Just answer the question or engage in the chat directly.`;
     } else {
         systemInstruction += `
-        STRICT FORMATTING RULES (Apply to ALL responses):
-        Every response must follow this exact 4-part briefing structure:
-        1. SUMMARY: A concise 1-2 sentence overview of the topic.
-        2. CURRENT STATUS: The direct, absolute most up-to-date answer to the user's specific question (e.g., current location, direct answer to a direction request, current president).
-        3. HISTORICAL CONTEXT: Relevant background information, who was there before, or the logic behind how the answer was derived.
-        4. FUN FACT: A unique, engaging fact about the subject.
+        STRICT BRIEFING RULES (Apply to ALL responses):
+        Every response must cover four things, in this order, but written as 1-3 flowing paragraphs of natural prose:
+        - A concise overview of the topic.
+        - The direct, absolute most up-to-date answer to the user's specific question (e.g., current location, direct answer to a direction request, current president).
+        - Relevant background/historical context, or the logic behind how the answer was derived.
+        - A unique, engaging fun fact about the subject.
+        DO NOT use any visible section labels, headers, or numbering (no "SUMMARY:", "CURRENT STATUS:", "HISTORICAL CONTEXT:", "FUN FACT:", "1.", "2.", etc.) — blend all four smoothly into the paragraphs so the structure is invisible to the reader.
 
         MAP LOGIC:
         - If the user asks about a city, location, or directions, focus exclusively on Earth geography.
