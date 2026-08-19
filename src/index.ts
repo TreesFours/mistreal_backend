@@ -212,13 +212,13 @@ app.get('/api/discovery/nearby', async (req, res) => {
         return res.status(400).json({ success: false, error: 'lat, lon, and category are required' });
     }
 
-    const results = await getNearbyPlaces(
+    const outcome = await getNearbyPlaces(
         Number(lat),
         Number(lon),
         radius !== undefined ? Number(radius) : 1000,
         String(category)
     );
-    res.json({ results });
+    res.json({ results: outcome.results, succeeded: outcome.succeeded });
 });
 
 // 📍 Location Update Endpoint
