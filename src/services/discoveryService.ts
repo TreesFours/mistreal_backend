@@ -1,20 +1,18 @@
 import axios from 'axios';
 import logger from '../utils/logger';
 
-// 🛰️ The public overpass-api.de instance frequently 504s ("server too busy") or
-// silently returns nothing under load — this was surfacing to users as "nothing
-// found nearby" even for dense, well-mapped areas. Try a short list of independent
-// public mirrors in sequence before giving up.
-// NOTE: the previous list (kumi.systems, openstreetmap.ru, private.coffee) was
-// individually verified unreachable/dead from this deployment — they only added
-// ~15s of dead latency per request without ever providing real fallback. Replaced
-// with hosts individually curl-verified to actually respond: the same operator's
-// z/lz4 load-balanced nodes (genuinely separate backend servers) plus the
-// independent Swiss-hosted overpass.osm.ch instance.
+// 🛰️ The public overpass-api.de instance frequently 504s ("server too busy") under load.
+// NOTE: overpass.osm.ch was tried here and REMOVED — it returns HTTP 200 with a
+// syntactically valid but functionally EMPTY dataset (its osm3s.timestamp_osm_base
+// came back as a broken value like "116511" instead of a real date, meaning its
+// replication is stale/dead). That's worse than an honest failure: it short-circuits
+// the fallback loop as a "success" while quietly returning nothing, which is exactly
+// what was masking this bug. lz4.overpass-api.de was curl-verified to return real,
+// current, correct results for the same query and is kept as the reliable fallback.
 const OVERPASS_MIRRORS = [
     'https://overpass-api.de/api/interpreter',
-    'https://overpass.osm.ch/api/interpreter',
     'https://lz4.overpass-api.de/api/interpreter',
+    'https://z.overpass-api.de/api/interpreter',
 ];
 
 // 🗺️ Category -> OpenStreetMap tag mapping (no API key required)
