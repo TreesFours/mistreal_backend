@@ -5,11 +5,16 @@ import logger from '../utils/logger';
 // silently returns nothing under load — this was surfacing to users as "nothing
 // found nearby" even for dense, well-mapped areas. Try a short list of independent
 // public mirrors in sequence before giving up.
+// NOTE: the previous list (kumi.systems, openstreetmap.ru, private.coffee) was
+// individually verified unreachable/dead from this deployment — they only added
+// ~15s of dead latency per request without ever providing real fallback. Replaced
+// with hosts individually curl-verified to actually respond: the same operator's
+// z/lz4 load-balanced nodes (genuinely separate backend servers) plus the
+// independent Swiss-hosted overpass.osm.ch instance.
 const OVERPASS_MIRRORS = [
     'https://overpass-api.de/api/interpreter',
-    'https://overpass.kumi.systems/api/interpreter',
-    'https://overpass.openstreetmap.ru/api/interpreter',
-    'https://overpass.private.coffee/api/interpreter',
+    'https://overpass.osm.ch/api/interpreter',
+    'https://lz4.overpass-api.de/api/interpreter',
 ];
 
 // 🗺️ Category -> OpenStreetMap tag mapping (no API key required)
@@ -67,7 +72,7 @@ export const getNearbyPlaces = async (lat: number, lon: number, radius: number, 
         try {
             const response = await axios.post(mirror, `data=${encodeURIComponent(query)}`, {
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                timeout: 12000,
+                timeout: 8000,
             });
 
             const elements = response.data?.elements || [];
