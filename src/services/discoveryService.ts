@@ -14,7 +14,7 @@ const GEOAPIFY_URL = 'https://api.geoapify.com/v2/places';
 // NOTE: "road" was dropped — Geoapify's Places API is point-of-interest based, and a
 // road is a line/way, not a place; it never had a sensible mapping here.
 const CATEGORY_TAGS: Record<string, string[]> = {
-    government: ['office.government'],
+    government: ['office.government', 'office.government.administrative', 'service.police', 'service.fire_station', 'tourism.sights.city_hall'],
     schools: ['education.school', 'education.university', 'education.college'],
     markets: ['commercial.supermarket', 'commercial.marketplace'],
     banks: ['service.financial.bank', 'service.financial.atm'],
@@ -22,6 +22,7 @@ const CATEGORY_TAGS: Record<string, string[]> = {
     rail: ['railway.train', 'public_transport.train'],
     waterbody: ['natural.water'],
     'religious building': ['religion.place_of_worship'],
+    parks: ['leisure.park'],
 };
 
 const DEFAULT_TAGS = ['commercial', 'office', 'service'];
