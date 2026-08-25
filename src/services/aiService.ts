@@ -137,6 +137,24 @@ export const getAvailableModels = async (isPro: boolean) => {
         try {
             const response = await axios.get('https://openrouter.ai/api/v1/models');
             if (response.data?.data) {
+                // 🆓 OPENROUTER FREE MODELS: Automatically extract all models with 0 pricing or ':free' suffix
+                const freeOpenRouter = response.data.data
+                    .filter((m: any) => {
+                        const pricing = m.pricing;
+                        const isFreePrice = pricing && Number(pricing.prompt) === 0 && Number(pricing.completion) === 0;
+                        const isFreeId = (m.id || '').toLowerCase().includes(':free');
+                        return isFreePrice || isFreeId;
+                    })
+                    .map((m: any) => ({
+                        id: m.id,
+                        name: m.name,
+                        provider: 'openrouter',
+                        isProOnly: false,
+                        price: 'Free',
+                        quota: "Free Tier",
+                        features: 3
+                    }));
+
                 const premium = response.data.data
                     .filter((m: any) => m.id.includes('gpt-4') || m.id.includes('claude') || m.id.includes('llama-3.1-405b'))
                     .map((m: any) => ({
@@ -148,7 +166,8 @@ export const getAvailableModels = async (isPro: boolean) => {
                         quota: "Premium",
                         features: 3
                     }));
-                models = [...models, ...(isPro ? premium : premium.slice(0, 3))];
+
+                models = [...models, ...freeOpenRouter, ...(isPro ? premium : premium.slice(0, 3))];
             }
         } catch (e) {}
     }
@@ -167,9 +186,14 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
     const isGoogleModel = !activeProvider.includes('/') && activeProvider !== 'openrouter';
 
     const persona = user?.aiPersona || 'Shadow';
+    const audience = user?.aiAudience || 'None';
     const isPersonal = persona.toLowerCase().includes('personal');
 
     let systemInstruction = `You are Mistreal AI, operating as the '${persona}' persona.`;
+
+    if (audience && audience !== 'None') {
+        systemInstruction += ` Target Audience: ${audience}. Tailor your terminology, depth, and tone specifically for this audience.`;
+    }
 
     if (isPersonal) {
         systemInstruction += `

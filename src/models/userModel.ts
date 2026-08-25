@@ -21,7 +21,8 @@ export class User extends Model {
     public emergencyContacts!: any[];
     public connectedPlatforms!: string[];
     public unreadMessagesCount!: number;
-    public zernioProfileId!: string | null; // Added for official Zernio SDK flow
+    public zernioProfileId!: string | null;
+    public lifeGist!: string | null; // Continuity memory for Shadow-Friend
 
     // 📍 Proactive Intelligence Fields
     public lastKnownLat!: number | null;
@@ -64,6 +65,7 @@ User.init({
     connectedPlatforms: { type: DataTypes.ARRAY(DataTypes.STRING), defaultValue: [] },
     unreadMessagesCount: { type: DataTypes.INTEGER, defaultValue: 0 },
     zernioProfileId: { type: DataTypes.STRING, allowNull: true },
+    lifeGist: { type: DataTypes.TEXT, allowNull: true },
 
     // 📍 Proactive Intelligence Fields
     lastKnownLat: { type: DataTypes.FLOAT, allowNull: true },
