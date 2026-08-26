@@ -23,6 +23,7 @@ import { getDetailedAstroData, getJplVectorData } from './services/astroService'
 import { IntelligenceService } from './services/intelligenceService';
 import { getNearbyPlaces } from './services/discoveryService';
 import { User, DelayedAction, IntelligenceBuffer } from './models/userModel';
+import { PinnedIntel } from './models/PinnedIntel';
 import { SocialToken } from './models/SocialToken';
 import { sequelize } from './db';
 import { verifyPurchase } from './services/googlePlayService';
@@ -39,13 +40,33 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const upload = multer({ storage: multer.memoryStorage() });
 
 // 🛡️ Helper: Get or Create User (Internal usage)
-const getOrCreateUserInternal = async (deviceId: string) => {
+const getOrCreateUserInternal = async (deviceId: string, firebaseUid?: string) => {
     if (!DATABASE_URL) return null;
     try {
-        const [user] = await User.findOrCreate({
+        // 🛡️ Zero-Defect Priority: If firebaseUid is provided, try to find by that first
+        if (firebaseUid) {
+            const userByUid = await User.findOne({ where: { firebaseUid } });
+            if (userByUid) {
+                // If deviceId differs, update it (continuity)
+                if (userByUid.deviceId !== deviceId) {
+                    userByUid.deviceId = deviceId;
+                    await userByUid.save();
+                }
+                return userByUid;
+            }
+        }
+
+        const [user, created] = await User.findOrCreate({
             where: { deviceId },
-            defaults: { deviceId, isPro: false, subscriptionTier: 'free' }
+            defaults: { deviceId, firebaseUid, isPro: false, subscriptionTier: 'free' }
         });
+
+        // Link firebaseUid if it wasn't linked yet
+        if (!created && firebaseUid && !user.firebaseUid) {
+            user.firebaseUid = firebaseUid;
+            await user.save();
+        }
+
         return user;
     } catch (e) { return null; }
 };
@@ -85,14 +106,14 @@ app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date() 
 
 // 🧠 AI Chat
 app.post('/api/chat', upload.fields([{ name: 'images', maxCount: 5 }, { name: 'audio', maxCount: 1 }]), validate(chatSchema), async (req, res) => {
-    let { prompt, provider, history, deviceId, contextMetadata } = req.body;
+    let { prompt, provider, history, deviceId, firebaseUid, contextMetadata } = req.body;
     const files = req.files as { images?: Express.Multer.File[], audio?: Express.Multer.File[] };
 
     if (typeof history === 'string') {
         try { history = JSON.parse(history); } catch (e) { history = []; }
     }
 
-    const user = await getOrCreateUserInternal(deviceId);
+    const user = await getOrCreateUserInternal(deviceId, firebaseUid);
 
     if (!prompt && !files?.audio) {
         return res.status(400).json({ success: false, error: 'Prompt or audio is required' });
@@ -147,11 +168,11 @@ app.post('/api/subscribe', async (req: any, res: any) => {
 
 // 🌦️ Intelligence Feed
 app.get('/api/weather', async (req, res) => {
-    const { lat, lon, deviceId } = req.query;
+    const { lat, lon, deviceId, firebaseUid } = req.query;
 
     // Proactive Cache Lookup
     if (deviceId) {
-        const user = await getOrCreateUserInternal(deviceId as string);
+        const user = await getOrCreateUserInternal(deviceId as string, firebaseUid as string);
         if (user && user.lastWeatherSummary && user.lastLocationUpdate) {
             const lastUpdate = new Date(user.lastLocationUpdate).getTime();
             const now = new Date().getTime();
@@ -171,7 +192,7 @@ app.get('/api/weather', async (req, res) => {
 
     // Update User Cache if possible
     if (deviceId && weather.summary !== "Weather unavailable") {
-        const user = await getOrCreateUserInternal(deviceId as string);
+        const user = await getOrCreateUserInternal(deviceId as string, firebaseUid as string);
         if (user) {
             user.lastKnownLat = Number(lat);
             user.lastKnownLon = Number(lon);
@@ -184,15 +205,17 @@ app.get('/api/weather', async (req, res) => {
 
     // Add Astro Summary to weather response for the top card
     try {
-        const astroData = await getDetailedAstroData();
-        if (astroData.length > 0) {
-            const description = astroData[0].description;
-            const moonMatch = description.match(/Moon phase: (.*)\. Notable/);
-            const planetMatch = description.match(/Notable planetary positions: (.*)\./);
-
-            weather.moonPhase = moonMatch ? moonMatch[1] : "Updating...";
-            weather.planets = planetMatch ? planetMatch[1] : "Calculating...";
-            weather.moonImageUrl = astroData[0].url;
+        const astroData = await getDetailedAstroData(Number(lat), Number(lon));
+        if (astroData) {
+            weather.celestial = {
+                moon: astroData.moon,
+                planets: astroData.planets
+            };
+            // Keep legacy fields for backward compatibility if needed,
+            // but use structured data for the new UI.
+            weather.moonPhase = astroData.moon.phase;
+            weather.planets = astroData.planets.filter((p: any) => p.isVisible).map((p: any) => p.name).join(', ');
+            weather.moonImageUrl = astroData.moon.imageUrl;
         }
     } catch (e) {}
 
@@ -200,9 +223,43 @@ app.get('/api/weather', async (req, res) => {
 });
 
 app.get('/api/news', async (req, res) => {
-    // Use the Rolling Buffer instead of on-demand fetching
+    const { firebaseUid, fastLoad } = req.query;
+
+    if (firebaseUid) {
+        // 🕒 NEW: Professional Interleaved Feed
+        const feed = await IntelligenceService.getInterleavedFeed(String(firebaseUid), fastLoad === 'true');
+        return res.json({ articles: feed });
+    }
+
+    // Fallback to legacy feed
     const news = await IntelligenceService.getGlobalFeed();
     res.json({ articles: news });
+});
+
+// 📌 Intelligence Pinning
+app.post('/api/intel/pin', async (req, res) => {
+    const { firebaseUid, itemTitle, itemUrl, itemType, metadata } = req.body;
+    if (!firebaseUid || !itemTitle) return res.status(400).json({ success: false, error: 'Missing required fields' });
+
+    try {
+        await PinnedIntel.findOrCreate({
+            where: { firebaseUid, itemTitle },
+            defaults: { firebaseUid, itemTitle, itemUrl, itemType, metadata }
+        });
+        res.json({ success: true });
+    } catch (e: any) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+app.post('/api/intel/unpin', async (req, res) => {
+    const { firebaseUid, itemTitle } = req.body;
+    try {
+        await PinnedIntel.destroy({ where: { firebaseUid, itemTitle } });
+        res.json({ success: true });
+    } catch (e: any) {
+        res.status(500).json({ success: false, error: e.message });
+    }
 });
 
 // 🔎 Nearby Discovery (real OSM points of interest, radius-aware)
@@ -223,11 +280,11 @@ app.get('/api/discovery/nearby', async (req, res) => {
 
 // 📍 Location Update Endpoint
 app.post('/api/user/location', async (req, res) => {
-    const { deviceId, lat, lon } = req.body;
+    const { deviceId, firebaseUid, lat, lon } = req.body;
     if (!deviceId || lat === undefined || lon === undefined) {
         return res.status(400).json({ success: false, error: 'deviceId, lat, and lon required' });
     }
-    const user = await getOrCreateUserInternal(deviceId);
+    const user = await getOrCreateUserInternal(deviceId, firebaseUid);
     if (user) {
         user.lastKnownLat = Number(lat);
         user.lastKnownLon = Number(lon);
@@ -260,7 +317,8 @@ app.get('/api/config', async (req, res) => {
     res.json({
         proPrice: "$9.99/mo",
         productId: "pro_monthly_subscription",
-        freeTrialDays: "7"
+        freeTrialDays: "7",
+        freePlatformLimit: parseInt(process.env.FREE_USER_PLATFORM_LIMIT || '1', 10)
     });
 });
 

@@ -167,12 +167,14 @@ export const getAvailableModels = async (isPro: boolean) => {
                         features: 3
                     }));
 
-                models = [...models, ...freeOpenRouter, ...(isPro ? premium : premium.slice(0, 3))];
+                // 🛡️ TIER-BASED FILTERING: Only show premium models to Pro users
+                models = [...models, ...freeOpenRouter, ...(isPro ? premium : [])];
             }
         } catch (e) {}
     }
 
-    return models;
+    // Final safety filter: Ensure free users never see Pro-only models
+    return isPro ? models : models.filter(m => !m.isProOnly);
 };
 
 /**
@@ -213,7 +215,15 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
 
         MAP LOGIC:
         - If the user asks about a city, location, or directions, focus exclusively on Earth geography.
-        - DO NOT include planetary or celestial data for terrestrial map questions.`;
+        - DO NOT include planetary or celestial data for terrestrial map questions.
+
+        TACTICAL ARCHITECTURE PROTOCOLS:
+        - If the user provides a '[TACTICAL_PERIMETER: points]', analyze the specific geographical area within those coordinates.
+        - Identify critical infrastructure, tactical advantages, or defensive weaknesses within that perimeter.
+        - If asked to "blueprint" or "layout" a building/plan, you MUST return a valid GeoJSON FeatureCollection in this format: [AI_BLUEPRINT: {"type":"FeatureCollection","features":[...]}]
+        - Use "LineString" for walls and "Point" for markers/assets in the geoJson.
+        - To mark a specific point of interest on the user's map automatically, append: [AI_MARKER: lat, lon, label].
+        - Use these tags SILENTLY (the user won't see them in the main text).`;
     }
 
     systemInstruction += `

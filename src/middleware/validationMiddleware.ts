@@ -32,6 +32,7 @@ export const chatSchema = z.object({
         prompt: z.string().optional(),
         provider: z.string().optional(),
         deviceId: z.string({ required_error: "deviceId is required" }),
+        firebaseUid: z.string().optional(),
         history: z.union([z.string(), z.array(z.any())]).optional(),
         contextMetadata: z.string().optional(),
     }).refine(data => data.prompt || data.history, {
@@ -52,6 +53,7 @@ export const socialActionSchema = z.object({
 export const userSettingsSchema = z.object({
     body: z.object({
         deviceId: z.string({ required_error: "deviceId is required" }),
+        firebaseUid: z.string().optional(),
         userName: z.string().optional(),
         aiPersona: z.string().optional(),
         autoReplyDelay: z.number().optional(),

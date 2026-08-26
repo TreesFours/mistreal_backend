@@ -1,14 +1,88 @@
 import axios from 'axios';
 import { Op } from 'sequelize';
 import logger from '../utils/logger';
-import { IntelligenceBuffer, User } from '../models/userModel';
+import { IntelligenceBuffer, User, SocialEvent } from '../models/userModel';
+import { PinnedIntel } from '../models/PinnedIntel';
 import { getWeatherData } from './weatherService';
 
 /**
  * 🛰️ STRATEGIC INTELLIGENCE SERVICE
- * Implements the "Rolling 15 Flow" and "Proactive Weather" logic.
+ * Implements the "Rolling 15 Flow", "Interleaved Rhythm", and "Proactive Weather" logic.
  */
 export class IntelligenceService {
+
+    /**
+     * Returns the consolidated feed for the app with a specific "Rhythm".
+     * 🕒 1 News -> 1 Novel -> 1 Astro -> 1 Social
+     */
+    static async getInterleavedFeed(firebaseUid: string, fastLoad: boolean = false) {
+        try {
+            // 1. Fetch User & Device Context
+            const user = await User.findOne({ where: { firebaseUid } });
+            const deviceId = user?.deviceId;
+
+            // 2. Fetch All Intelligence Buffers
+            const [newsBuffer, novelBuffer, astroBuffer] = await Promise.all([
+                IntelligenceBuffer.findOne({ where: { category: 'news' } }),
+                IntelligenceBuffer.findOne({ where: { category: 'novels' } }),
+                IntelligenceBuffer.findOne({ where: { category: 'astro' } })
+            ]);
+
+            // 3. Fetch Social Events (only if deviceId is known)
+            let socialItems: any[] = [];
+            if (deviceId) {
+                const events = await SocialEvent.findAll({
+                    where: { deviceId },
+                    order: [['timestamp', 'DESC']],
+                    limit: 15
+                });
+                socialItems = events.map(e => ({
+                    title: `[Social] ${e.senderName}`,
+                    description: e.content,
+                    url: `mistreal://chat?platform=${e.platform}&targetId=${e.senderId}`,
+                    source: e.platform,
+                    timestamp: e.timestamp,
+                    type: 'social'
+                }));
+            }
+
+            // 4. Fetch Pinned Intel
+            const pinned = await PinnedIntel.findAll({ where: { firebaseUid } });
+            const pinnedTitles = pinned.map(p => p.itemTitle);
+
+            // 5. Prepare Categories (Filtering out pinned items so they don't appear twice)
+            const limit = fastLoad ? 3 : 15;
+            const news = (newsBuffer?.items || []).filter((i: any) => !pinnedTitles.includes(i.title)).slice(0, limit);
+            const novels = (novelBuffer?.items || []).filter((i: any) => !pinnedTitles.includes(i.title)).slice(0, limit);
+            const astro = (astroBuffer?.items || []).filter((i: any) => !pinnedTitles.includes(i.title)).slice(0, limit);
+            const socials = socialItems.filter((i: any) => !pinnedTitles.includes(i.title)).slice(0, limit);
+
+            // 6. Interleave Logic (The Rhythm)
+            const interleaved: any[] = [];
+            const maxLength = Math.max(news.length, novels.length, astro.length, socials.length);
+
+            for (let i = 0; i < maxLength; i++) {
+                if (news[i]) interleaved.push({ ...news[i], type: 'news' });
+                if (novels[i]) interleaved.push({ ...novels[i], type: 'novel' });
+                if (astro[i]) interleaved.push({ ...astro[i], type: 'astro' });
+                if (socials[i]) interleaved.push(socials[i]);
+            }
+
+            // 7. Add Pinned items to the very top
+            const finalPinned = pinned.map(p => ({
+                title: p.itemTitle,
+                url: p.itemUrl,
+                type: p.itemType,
+                ...p.metadata,
+                isPinned: true
+            }));
+
+            return [...finalPinned, ...interleaved];
+        } catch (e: any) {
+            logger.error(`❌ Interleaved Feed Error: ${e.message}`);
+            return [];
+        }
+    }
 
     /**
      * Updates a specific intelligence category buffer.
@@ -50,17 +124,12 @@ export class IntelligenceService {
     static async refreshGlobalIntel() {
         logger.info('🚀 Starting Global Intelligence Refresh...');
 
-        // 1. News (Hourly)
-        await this.refreshNews();
-
-        // 2. Entertainment (Hourly)
-        await this.refreshEntertainment();
-
-        // 3. NASA APOD (Daily)
-        await this.refreshAstro();
-
-        // 4. Novels (Daily)
-        await this.refreshLiterature();
+        await Promise.all([
+            this.refreshNews(),
+            this.refreshEntertainment(),
+            this.refreshAstro(),
+            this.refreshLiterature()
+        ]);
     }
 
     private static async refreshNews() {
@@ -136,7 +205,6 @@ export class IntelligenceService {
 
     /**
      * PROACTIVE WEATHER ENGINE
-     * Refreshes weather for all active users based on their last known location.
      */
     static async refreshProactiveWeather() {
         logger.info('🌦️ Refreshing proactive weather for active users...');
@@ -160,30 +228,14 @@ export class IntelligenceService {
     }
 
     /**
-     * Returns the consolidated feed for the app.
-     * 🕒 INTERLEAVED & RANDOMIZED FLOW
+     * Legacy Global Feed (kept for compatibility)
      */
     static async getGlobalFeed() {
         const buffers = await IntelligenceBuffer.findAll();
         let allItems: any[] = [];
-
         buffers.forEach(buffer => {
             allItems = [...allItems, ...(buffer.items || [])];
         });
-
-        // 🌪️ STRATEGIC MIXING:
-        // 1. Sort by date (descending) to ensure latest is always near top
-        // 2. Add a tiny bit of random jitter within items of same hour to keep it fresh
-        return allItems.sort((a, b) => {
-            const timeA = new Date(a.timestamp).getTime();
-            const timeB = new Date(b.timestamp).getTime();
-
-            // If they are from the same hour, randomize thier relative position
-            if (Math.abs(timeA - timeB) < 3600000) {
-                return 0.5 - Math.random();
-            }
-
-            return timeB - timeA;
-        });
+        return allItems.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     }
 }

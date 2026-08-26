@@ -131,6 +131,17 @@ export const createConnectSession = async (platform: string, deviceId: string, c
         const user = await User.findOne({ where: { deviceId } });
         if (!user) throw new Error('User not found');
 
+        // 🛡️ TIER LIMIT ENFORCEMENT
+        if (!user.isPro) {
+            const limit = parseInt(process.env.FREE_USER_PLATFORM_LIMIT || '1', 10);
+            const currentConnected = user.connectedPlatforms || [];
+
+            // Allow re-connecting an existing platform, but block NEW ones if limit reached
+            if (!currentConnected.includes(platform.toLowerCase()) && currentConnected.length >= limit) {
+                throw new Error(`LIMIT_REACHED: Free tier is limited to ${limit} social connection${limit === 1 ? '' : 's'}.`);
+            }
+        }
+
         if (!user.zernioProfileId) {
             user.zernioProfileId = await ZernioAdapter.getOrCreateProfile(deviceId);
             await user.save();
