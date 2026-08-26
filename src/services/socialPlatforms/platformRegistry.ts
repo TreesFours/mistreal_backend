@@ -73,9 +73,9 @@ const PLATFORM_DEFINITIONS: Record<string, SocialPlatformDefinition> = {
 
 export const getPlatformDefinition = (platform: string): SocialPlatformDefinition | undefined => {
   const normalized = platform.toLowerCase();
-  return PLATFORM_DEFINITIONS[normalized] || Object.values(PLATFORM_DEFINITIONS).find(p => p.id === normalized);
+  return PLATFORM_DEFINITIONS[normalized] || Object.values(PLATFORM_DEFINITIONS).find((p: any) => p.id === normalized);
 };
 
 export const getAvailablePlatformDefinitions = (isPro: boolean): SocialPlatformDefinition[] => {
-  return Object.values(PLATFORM_DEFINITIONS).filter(def => isPro || !def.isProOnly);
+  return Object.values(PLATFORM_DEFINITIONS).filter((def: any) => isPro || !def.isProOnly);
 };

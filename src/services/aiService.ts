@@ -98,15 +98,15 @@ export const getRankedGeminiModels = async (isPro: boolean = false): Promise<str
         return defaults;
     }
 
-    const sorted = [...liveModels].sort((a, b) => rankModelStability(b) - rankModelStability(a));
+    const sorted = [...liveModels].sort((a: any, b: any) => rankModelStability(b) - rankModelStability(a));
     const cleanName = (model: any) => model.name.replace('models/', '');
 
     let candidates: string[] = [];
 
     if (isPro) {
-        candidates = sorted.filter(m => m.name.toLowerCase().includes('pro')).map(cleanName);
+        candidates = sorted.filter((m: any) => m.name.toLowerCase().includes('pro')).map(cleanName);
     } else {
-        candidates = sorted.filter(m => m.name.toLowerCase().includes('flash')).map(cleanName);
+        candidates = sorted.filter((m: any) => m.name.toLowerCase().includes('flash')).map(cleanName);
     }
 
     // Merge with defaults to ensure we always have valid IDs
@@ -117,7 +117,7 @@ export const getRankedGeminiModels = async (isPro: boolean = false): Promise<str
 export const getAvailableModels = async (isPro: boolean) => {
     const openRouterKey = process.env.OPENROUTER_API_KEY;
     const geminiModels = await getLiveGeminiModels();
-    const sortedGeminiModels = [...geminiModels].sort((a, b) => rankModelStability(b) - rankModelStability(a));
+    const sortedGeminiModels = [...geminiModels].sort((a: any, b: any) => rankModelStability(b) - rankModelStability(a));
 
     let models = sortedGeminiModels.map((m: any) => {
         const id = m.name.replace('models/', '');
@@ -174,7 +174,7 @@ export const getAvailableModels = async (isPro: boolean) => {
     }
 
     // Final safety filter: Ensure free users never see Pro-only models
-    return isPro ? models : models.filter(m => !m.isProOnly);
+    return isPro ? models : models.filter((m: any) => !m.isProOnly);
 };
 
 /**
@@ -244,7 +244,7 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
         }
 
         const modelsToTry: string[] = [targetModel];
-        rankedCandidates.slice(0, 2).forEach(m => {
+        rankedCandidates.slice(0, 2).forEach((m: any) => {
             if (!modelsToTry.includes(m)) modelsToTry.push(m);
         });
 
@@ -263,7 +263,7 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
                 }));
 
                 const currentParts: any[] = [{ text: prompt }];
-                if (imageDatas) imageDatas.forEach(d => currentParts.push({ inline_data: { mime_type: "image/jpeg", data: d } }));
+                if (imageDatas) imageDatas.forEach((d: any) => currentParts.push({ inline_data: { mime_type: "image/jpeg", data: d } }));
                 if (audioData) currentParts.push({ inline_data: { mime_type: "audio/mp3", data: audioData } });
                 contents.push({ role: 'user', parts: currentParts });
 

@@ -36,7 +36,7 @@ export class IntelligenceService {
                     order: [['timestamp', 'DESC']],
                     limit: 15
                 });
-                socialItems = events.map(e => ({
+                socialItems = events.map((e: any) => ({
                     title: `[Social] ${e.senderName}`,
                     description: e.content,
                     url: `mistreal://chat?platform=${e.platform}&targetId=${e.senderId}`,
@@ -48,7 +48,7 @@ export class IntelligenceService {
 
             // 4. Fetch Pinned Intel
             const pinned = await PinnedIntel.findAll({ where: { firebaseUid } });
-            const pinnedTitles = pinned.map(p => p.itemTitle);
+            const pinnedTitles = pinned.map((p: any) => p.itemTitle);
 
             // 5. Prepare Categories (Filtering out pinned items so they don't appear twice)
             const limit = fastLoad ? 3 : 15;
@@ -69,7 +69,7 @@ export class IntelligenceService {
             }
 
             // 7. Add Pinned items to the very top
-            const finalPinned = pinned.map(p => ({
+            const finalPinned = pinned.map((p: any) => ({
                 title: p.itemTitle,
                 url: p.itemUrl,
                 type: p.itemType,
@@ -98,7 +98,7 @@ export class IntelligenceService {
             const currentItems = buffer.items || [];
 
             // Add new items, filtering out duplicates by title
-            const uniqueNewItems = newItems.filter(newItem =>
+            const uniqueNewItems = newItems.filter((newItem: any) =>
                 !currentItems.some((existing: any) => existing.title === newItem.title)
             );
 
@@ -233,9 +233,9 @@ export class IntelligenceService {
     static async getGlobalFeed() {
         const buffers = await IntelligenceBuffer.findAll();
         let allItems: any[] = [];
-        buffers.forEach(buffer => {
+        buffers.forEach((buffer: any) => {
             allItems = [...allItems, ...(buffer.items || [])];
         });
-        return allItems.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        return allItems.sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     }
 }

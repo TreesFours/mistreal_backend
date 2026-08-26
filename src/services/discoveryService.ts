@@ -85,7 +85,7 @@ export const getNearbyPlaces = async (lat: number, lon: number, radius: number, 
         // De-dupe by name+coords, cap at 25
         const seen = new Set<string>();
         const deduped = results
-            .filter(r => {
+            .filter((r: any) => {
                 const key = `${r.name}:${r.latitude}:${r.longitude}`;
                 if (seen.has(key)) return false;
                 seen.add(key);

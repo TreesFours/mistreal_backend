@@ -70,7 +70,7 @@ export const getDetailedAstroData = async (lat: number = 0, lon: number = 0) => 
         const moonAlt = moonPosRow ? parseFloat(moonPosRow.cells[0].position.horizonal.altitude.degrees) : 0;
 
         // Calculate "Near Moon" (within ~15 degrees)
-        const planetsWithProximity = visiblePlanets.map(p => {
+        const planetsWithProximity = visiblePlanets.map((p: any) => {
             const azDiff = Math.abs(p.azimuth - moonAz);
             const altDiff = Math.abs(p.altitude - moonAlt);
             const distance = Math.sqrt(azDiff * azDiff + altDiff * altDiff);
@@ -86,7 +86,7 @@ export const getDetailedAstroData = async (lat: number = 0, lon: number = 0) => 
                 direction: getCompassDirection(moonAz)
             },
             planets: planetsWithProximity,
-            summary: `Moon: ${moonPhaseName}. Visible: ${planetsWithProximity.filter(p => p.isVisible).map(p => p.name).join(', ') || 'None'}.`
+            summary: `Moon: ${moonPhaseName}. Visible: ${planetsWithProximity.filter((p: any) => p.isVisible).map((p: any) => p.name).join(', ') || 'None'}.`
         };
     } catch (error: any) {
         logger.error(`❌ AstronomyAPI Failure:`, error.message);

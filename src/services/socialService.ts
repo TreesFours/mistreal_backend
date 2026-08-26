@@ -3,7 +3,7 @@ import { getPlatformDefinition, getAvailablePlatformDefinitions } from './social
 import { ZernioAdapter } from './socialPlatforms/zernioAdapter';
 
 export const getAvailablePlatforms = async (isPro: boolean) => {
-    return getAvailablePlatformDefinitions(isPro).map(def => ({
+    return getAvailablePlatformDefinitions(isPro).map((def: any) => ({
         id: def.id,
         name: def.displayName,
         icon: def.icon,
@@ -24,7 +24,7 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
             limit: 50
         });
 
-        let items = events.map(e => ({
+        let items = events.map((e: any) => ({
             _id: e.externalId,
             platform: e.platform,
             author: { id: e.senderId, name: e.senderName },
@@ -179,7 +179,7 @@ export const exchangeOAuthCode = async (deviceId: string, platform: string, code
     const connected = user.connectedPlatforms || [];
     const normalizedPlatform = platform.toLowerCase();
 
-    if (!connected.map(p => p.toLowerCase()).includes(normalizedPlatform)) {
+    if (!connected.map((p: any) => p.toLowerCase()).includes(normalizedPlatform)) {
         connected.push(normalizedPlatform);
         // Force Sequelize to recognize the array change
         user.set('connectedPlatforms', connected);
@@ -205,7 +205,7 @@ export const disconnectPlatform = async (deviceId: string, platform: string) => 
         if (!user) return { success: false, error: 'User not found' };
 
         const connected = user.connectedPlatforms || [];
-        user.set('connectedPlatforms', connected.filter(p => p.toLowerCase() !== platform.toLowerCase()));
+        user.set('connectedPlatforms', connected.filter((p: any) => p.toLowerCase() !== platform.toLowerCase()));
         user.changed('connectedPlatforms', true);
 
         // Also clear profileId if it was a critical failure? No, usually keep it for reconnections.
