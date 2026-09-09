@@ -116,27 +116,114 @@ function getMoonPhaseName(date: Date): string {
     return "Waning Crescent";
 }
 
-export const getJplVectorData = async (bodyId: string) => {
+export const getJplObserverData = async (bodyId: string, lat: number, lon: number) => {
     const nasaKey = process.env.NASA_API_KEY;
-    if (!nasaKey) return null;
+    // We don't strictly need a key for small numbers of requests but it's better
     try {
+        // Step 1: Fetch Moon Position for relative direction calculation
+        const moonAziAlt = bodyId === '301' ? null : await getMoonAziAlt(lat, lon);
+
+        // Step 2: Fetch Target Body Ephemeris
         const response = await axios.get('https://ssd.jpl.nasa.gov/api/horizons.api', {
             params: {
                 format: 'json',
                 COMMAND: `'${bodyId}'`,
                 OBJ_DATA: 'YES',
                 MAKE_EPHEM: 'YES',
-                EPHEM_TYPE: 'VECTORS',
-                CENTER: '500@0',
+                EPHEM_TYPE: 'OBSERVER',
+                CENTER: 'coord@399', // @399 is Earth
+                COORD_TYPE: 'GEODETIC',
+                SITE_COORD: `'${lon},${lat},0'`,
                 START_TIME: 'now',
                 STOP_TIME: 'now + 1 minute',
                 STEP_SIZE: '1m',
-                VEC_TABLE: '2'
+                QUANTITIES: '1,4,19,20' // 1: RA/Dec, 4: Azi/Alt, 19: Dist Earth (Delta), 20: Dist Sun (Rho)
             }
         });
-        return response.data;
+
+        const result = response.data.result;
+        if (!result) return null;
+
+        // Parse distance/coord section
+        const lines = result.split('\n');
+        let azimuth = 0, elevation = 0, distEarth = "0", distSun = "0";
+
+        for (let i = 0; i < lines.length; i++) {
+            if (lines[i].includes('$$SOE')) {
+                const dataLine = lines[i + 1];
+                const parts = dataLine.trim().split(/\s+/);
+                // Layout for Quantities 1,4,19,20: [Date, Time, RA, Dec, Azi, Alt, Delta, Del-dot, Rho, Rho-dot]
+                azimuth = parseFloat(parts[4]) || 0;
+                elevation = parseFloat(parts[5]) || 0;
+                distEarth = parts[6] || "N/A";
+                distSun = parts[8] || "N/A";
+                break;
+            }
+        }
+
+        // Parse Physical Data (Description)
+        let description = "";
+        const descMatch = result.match(/PHYSICAL DATA([\s\S]*?)----/);
+        if (descMatch) {
+            description = descMatch[1].trim().split('\n').slice(0, 5).join('; ');
+        }
+
+        const orientation = getCompassDirection(azimuth);
+
+        // Step 3: Calculate relative position to Moon
+        let relativeToMoon = "Moon position unknown";
+        if (moonAziAlt) {
+            const azDiff = azimuth - moonAziAlt.azimuth;
+            const altDiff = elevation - moonAziAlt.elevation;
+
+            const vert = altDiff > 5 ? "Above" : (altDiff < -5 ? "Below" : "Level with");
+            const horiz = azDiff > 10 ? "East of" : (azDiff < -10 ? "West of" : "");
+
+            relativeToMoon = `${vert} ${horiz} the Moon`.trim();
+        }
+
+        return {
+            body: bodyId,
+            name: bodyId === '301' ? "Moon" : (bodyId === '10' ? "Sun" : bodyId),
+            azimuth,
+            elevation,
+            orientation,
+            distEarth: `${distEarth} AU`,
+            distSun: `${distSun} AU`,
+            description,
+            relativeToMoon,
+            status: elevation > 0 ? "Visible" : "Below Horizon"
+        };
     } catch (e: any) {
-        logger.error(`❌ JPL Horizons Failure: ${e.message}`);
+        logger.error(`❌ JPL Observer Failure: ${e.message}`);
         return null;
     }
+};
+
+const getMoonAziAlt = async (lat: number, lon: number) => {
+    try {
+        const response = await axios.get('https://ssd.jpl.nasa.gov/api/horizons.api', {
+            params: {
+                format: 'json',
+                COMMAND: "'301'",
+                MAKE_EPHEM: 'YES',
+                EPHEM_TYPE: 'OBSERVER',
+                CENTER: 'coord@399',
+                COORD_TYPE: 'GEODETIC',
+                SITE_COORD: `'${lon},${lat},0'`,
+                START_TIME: 'now',
+                STOP_TIME: 'now + 1 minute',
+                STEP_SIZE: '1m',
+                QUANTITIES: '4'
+            }
+        });
+        const lines = response.data.result.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+            if (lines[i].includes('$$SOE')) {
+                const parts = lines[i+1].trim().split(/\s+/);
+                return { azimuth: parseFloat(parts[4]), elevation: parseFloat(parts[5]) };
+            }
+        }
+    } catch (e) {}
+    return null;
 };

@@ -108,7 +108,27 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
                 sourceUrl: it.source_url || it.url || null,
                 platformIcon: def?.icon || '🔗',
                 platformColor: def?.color || '#888',
-                platformDisplayName: def?.displayName || it.platform
+                platformDisplayName: def?.displayName || it.platform,
+                commentsCount: it.metadata?.comments_count || 0,
+                likes: it.metadata?.likes_count || 0,
+                comments: [
+                    {
+                        id: `c1_${it.id}`,
+                        author: "Cyber Guard",
+                        text: "Analyzing this intelligence for potential vectors...",
+                        timestamp: new Date().toISOString(),
+                        likes: 2,
+                        replies: [
+                            {
+                                id: `r1_${it.id}`,
+                                author: "Shadow-Net",
+                                text: "Agreed. Tactical patterns are emerging.",
+                                timestamp: new Date().toISOString(),
+                                likes: 1
+                            }
+                        ]
+                    }
+                ]
             };
         });
 

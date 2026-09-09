@@ -37,7 +37,10 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3000;
 const DATABASE_URL = process.env.DATABASE_URL;
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 15 * 1024 * 1024 } // 15MB tactical limit
+});
 
 // 🛡️ Helper: Get or Create User (Internal usage)
 const getOrCreateUserInternal = async (deviceId: string, firebaseUid?: string) => {
@@ -141,7 +144,12 @@ app.get('/api/models', async (req, res) => {
         const user = await getOrCreateUserInternal(String(deviceId));
         isPro = user?.isPro ?? false;
     }
-    const models = await getAvailableModels(isPro);
+
+    // 🛡️ Tactical Quota Calculation: Count total users to split shared resources
+    const freeUserCount = await User.count({ where: { isPro: false } }) || 1;
+    const proUserCount = await User.count({ where: { isPro: true } }) || 1;
+
+    const models = await getAvailableModels(isPro, freeUserCount, proUserCount);
     res.json(models);
 });
 
@@ -315,52 +323,29 @@ app.post('/api/payment/verify', async (req, res) => {
 // ⚙️ App Config
 app.get('/api/config', async (req, res) => {
     res.json({
-        proPrice: "$9.99/mo",
-        productId: "pro_monthly_subscription",
-        freeTrialDays: "7",
+        proPrice: process.env.PRO_PRICE || "$9.99/mo",
+        productId: process.env.PRO_PRODUCT_ID || "pro_monthly_subscription",
+        freeTrialDays: process.env.FREE_TRIAL_DAYS || "7",
         freePlatformLimit: parseInt(process.env.FREE_USER_PLATFORM_LIMIT || '1', 10)
     });
 });
 
 // 🛰️ Celestial Precision Vectors
 app.get('/api/celestial/vectors', async (req, res) => {
-    const { bodyId } = req.query;
+    const { bodyId, lat, lon } = req.query;
     if (!bodyId) return res.status(400).json({ success: false, error: 'bodyId required' });
 
-    const { getJplVectorData } = require('./services/astroService');
-    const data = await getJplVectorData(String(bodyId));
+    const { getJplObserverData } = require('./services/astroService');
+    const data = await getJplObserverData(
+        String(bodyId),
+        lat ? Number(lat) : 0,
+        lon ? Number(lon) : 0
+    );
 
-    if (data && data.result) {
-        // Parse JPL Horizons response to extract relative orientation
-        // Strategy: Use the most recent vector to determine azimuth/elevation
-        const lines = data.result.split('\n');
-        let x = 0, y = 0, z = 0;
-
-        for (let i = 0; i < lines.length; i++) {
-            if (lines[i].includes('$$SOE')) {
-                const vectorLine = lines[i+1]; // Line after start of ephemeris
-                const parts = vectorLine.trim().split(/\s+/);
-                // JPL Vector format: [JulianDate, X, Y, Z, VX, VY, VZ]
-                x = parseFloat(parts[1]) || 0;
-                y = parseFloat(parts[2]) || 0;
-                z = parseFloat(parts[3]) || 0;
-                break;
-            }
-        }
-
-        // Convert Cartesian to Horizontal Coordinates (Approximate for list display)
-        const azimuth = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
-        const elevation = Math.atan2(z, Math.sqrt(x*x + y*y)) * 180 / Math.PI;
-
-        const orientation = getCompassDirection(azimuth);
-
+    if (data) {
         res.json({
             success: true,
-            body: bodyId,
-            azimuth,
-            elevation,
-            orientation,
-            status: elevation > 0 ? "Visible" : "Below Horizon"
+            ...data
         });
     } else {
         res.status(500).json({ success: false, error: 'JPL Data unavailable' });

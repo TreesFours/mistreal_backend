@@ -4,7 +4,8 @@ import { Op } from 'sequelize';
 import axios from 'axios';
 import * as admin from 'firebase-admin';
 import logger from '../utils/logger';
-import { User, SocialEvent, sequelize } from '../models/userModel';
+import { User, SocialEvent, DelayedAction, sequelize } from '../models/userModel';
+import { getAiResponse } from './aiService';
 
 export class WebhookService {
 // ... (rest of the imports/class structure)
@@ -179,6 +180,29 @@ export class WebhookService {
         await user.save({ transaction });
 
         logger.info(`💬 [${platform}] Message queued for Shadow AI analysis.`);
+
+        // 🛡️ GHOST RESPONDER: Auto-Reply Logic
+        if (user.guardianEnabled) {
+            const incomingContent = data.content?.text || data.text || "";
+            const prompt = `AUTO_REPLY_MODE: A contact named ${sender} just sent you this on ${platform}: "${incomingContent}".
+            Reply as ${user.aiPersona || 'Shadow'}. Be concise. Keep it tactical.`;
+
+            const aiResponse = await getAiResponse(prompt, 'gemini-1.5-flash', [], user);
+
+            if (aiResponse.success) {
+                const delayMs = (user.autoReplyDelay || 15) * 60000;
+                await DelayedAction.create({
+                    deviceId: user.deviceId,
+                    type: 'message',
+                    platform: platform.toLowerCase(),
+                    content: aiResponse.content,
+                    targetId: data.sender?.id || data.author?.id,
+                    executeAt: new Date(Date.now() + delayMs),
+                    status: 'pending'
+                }, { transaction });
+                logger.info(`⏳ [${platform}] Auto-reply scheduled in ${user.autoReplyDelay} mins.`);
+            }
+        }
     }
 
     private static async handleMessageRead(user: any, data: any, platform: string, transaction: any) {
