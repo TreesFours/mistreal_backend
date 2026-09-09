@@ -19,7 +19,7 @@ import { getAiResponse, getAvailableModels, extractImageData, extractAudioData }
 import { getSocialSummary, createConnectSession, sendSocialAction } from './services/socialService';
 import { createSubscriptionSession, handleWebhook } from './services/stripeService';
 import { getWeatherData } from './services/weatherService';
-import { getDetailedAstroData, getJplVectorData } from './services/astroService';
+import { getDetailedAstroData } from './services/astroService';
 import { IntelligenceService } from './services/intelligenceService';
 import { getNearbyPlaces } from './services/discoveryService';
 import { User, DelayedAction, IntelligenceBuffer } from './models/userModel';

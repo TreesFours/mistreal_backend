@@ -4,6 +4,7 @@ import logger from '../utils/logger';
 import { IntelligenceBuffer, User, SocialEvent } from '../models/userModel';
 import { PinnedIntel } from '../models/PinnedIntel';
 import { getWeatherData } from './weatherService';
+import { getDetailedAstroData } from './astroService';
 
 /**
  * 🛰️ STRATEGIC INTELLIGENCE SERVICE
@@ -137,7 +138,6 @@ export class IntelligenceService {
 
         await Promise.all([
             this.refreshNews(),
-            this.refreshEntertainment(),
             this.refreshAstro(),
             this.refreshLiterature(),
             this.refreshWiki(),
@@ -170,6 +170,28 @@ export class IntelligenceService {
             }
 
             await this.updateBuffer('news', allArticles);
+        } catch (e) {}
+    }
+
+    private static async refreshAstro() {
+        try {
+            // General Astro Intel (using 0,0 as baseline)
+            const data = await getDetailedAstroData(0, 0);
+            if (!data) return;
+
+            const astroItem = {
+                title: `[Astro] ${data.moon.phase} phase`,
+                description: `Current Moon state: ${data.moon.phase}. ${data.summary}`,
+                url: data.moon.imageUrl || "https://api.astronomyapi.com",
+                source: 'Astronomy Intelligence',
+                timestamp: new Date().toISOString(),
+                metadata: {
+                    moonPhase: data.moon.phase,
+                    planets: data.planets.filter((p: any) => p.isVisible).map((p: any) => p.name).join(', ')
+                }
+            };
+
+            await this.updateBuffer('astro', [astroItem]);
         } catch (e) {}
     }
 
