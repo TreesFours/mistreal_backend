@@ -77,5 +77,5 @@ export const getPlatformDefinition = (platform: string): SocialPlatformDefinitio
 };
 
 export const getAvailablePlatformDefinitions = (isPro: boolean): SocialPlatformDefinition[] => {
-  return Object.values(PLATFORM_DEFINITIONS).filter((def: any) => isPro || !def.isProOnly);
+  return Object.values(PLATFORM_DEFINITIONS);
 };

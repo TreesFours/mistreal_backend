@@ -152,14 +152,24 @@ export const createConnectSession = async (platform: string, deviceId: string, c
         if (!user) throw new Error('User not found');
 
         // 🛡️ TIER LIMIT ENFORCEMENT
-        if (!user.isPro) {
-            const limit = parseInt(process.env.FREE_USER_PLATFORM_LIMIT || '1', 10);
-            const currentConnected = user.connectedPlatforms || [];
+        const tier = user.subscriptionTier?.toLowerCase() || 'free';
+        let limit = parseInt(process.env.FREE_USER_PLATFORM_LIMIT || '1', 10);
 
-            // Allow re-connecting an existing platform, but block NEW ones if limit reached
-            if (!currentConnected.includes(platform.toLowerCase()) && currentConnected.length >= limit) {
-                throw new Error(`LIMIT_REACHED: Free tier is limited to ${limit} social connection${limit === 1 ? '' : 's'}.`);
-            }
+        if (tier === 'premium1') {
+            limit = parseInt(process.env.PREMIUM_1_PLATFORM_LIMIT || '5', 10);
+        } else if (tier === 'premium2') {
+            limit = parseInt(process.env.PREMIUM_2_PLATFORM_LIMIT || '99', 10);
+        } else if (user.isPro) {
+            // Legacy check or manual "isPro" flag override
+            limit = 99;
+        }
+
+        const currentConnected = user.connectedPlatforms || [];
+
+        // Allow re-connecting an existing platform, but block NEW ones if limit reached
+        if (!currentConnected.map(p => p.toLowerCase()).includes(platform.toLowerCase()) && currentConnected.length >= limit) {
+            const tierLabel = tier === 'free' ? 'Free tier' : tier === 'premium1' ? 'Premium 1' : 'Your subscription';
+            throw new Error(`LIMIT_REACHED: ${tierLabel} is limited to ${limit} social connection${limit === 1 ? '' : 's'}.`);
         }
 
         if (!user.zernioProfileId) {
