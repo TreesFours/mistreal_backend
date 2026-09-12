@@ -9,24 +9,19 @@ const router = Router();
  * 🛡️ STRATEGIC USER RESOLUTION
  */
 const getResolvedUser = async (req: any) => {
-    const deviceId = (req.query.deviceId || req.body.deviceId) as string;
     const firebaseUid = req.user?.uid;
 
+    if (!firebaseUid) return null;
+
     try {
-        let user: User | null = null;
-        if (firebaseUid) user = await User.findOne({ where: { firebaseUid } });
-        if (!user && deviceId) user = await User.findOne({ where: { deviceId } });
+        let user = await User.findOne({ where: { firebaseUid } });
+        if (user) return user;
 
-        if (user) {
-            if (firebaseUid && !user.firebaseUid) { user.firebaseUid = firebaseUid; await user.save(); }
-            return user;
-        }
-
-        if (deviceId) {
-            return await User.create({ deviceId, firebaseUid, isPro: false });
-        }
+        const deviceId = (req.query.deviceId || req.body.deviceId) as string;
+        return await User.create({ firebaseUid, deviceId: deviceId || null, isPro: false });
+    } catch (e) {
         return null;
-    } catch (e) { return null; }
+    }
 };
 
 // ⚙️ Update User Settings

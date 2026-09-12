@@ -7,7 +7,7 @@ const router = Router();
 
 router.post('/zernio', async (req: Request, res: Response) => {
     const signature = req.headers['x-zernio-signature'] as string;
-    const payload = JSON.stringify(req.body);
+    const payload = (req as any).rawBody ? (req as any).rawBody.toString('utf8') : JSON.stringify(req.body);
 
     // 1. Verify Security
     if (!WebhookService.verifySignature(payload, signature)) {
