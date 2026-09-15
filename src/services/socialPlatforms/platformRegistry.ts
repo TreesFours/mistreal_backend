@@ -60,6 +60,30 @@ const PLATFORM_DEFINITIONS: Record<string, SocialPlatformDefinition> = {
     displayName: 'LinkedIn',
     icon: 'in',
     color: '#0A66C2'
+  },
+  tiktok: {
+    id: 'tiktok',
+    displayName: 'TikTok',
+    icon: '🎵',
+    color: '#000000'
+  },
+  snapchat: {
+    id: 'snapchat',
+    displayName: 'Snapchat',
+    icon: '👻',
+    color: '#FFFC00'
+  },
+  youtube: {
+    id: 'youtube',
+    displayName: 'YouTube',
+    icon: '📺',
+    color: '#FF0000'
+  },
+  twitch: {
+    id: 'twitch',
+    displayName: 'Twitch',
+    icon: '🎮',
+    color: '#9146FF'
   }
 };
 
