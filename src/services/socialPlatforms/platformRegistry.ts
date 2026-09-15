@@ -5,69 +5,61 @@ export interface SocialPlatformDefinition {
   displayName: string;
   icon: string;
   color: string;
-  isProOnly: boolean;
 }
 
 /**
  * 📊 ZERNIO OFFICIAL PLATFORM REGISTRY
- * Now purely declarative metadata. The ZernioAdapter handles the actual logic.
+ * All platforms are universally accessible. Limitations are determined purely
+ * by the count cap allowed by the user's tier.
  */
 const PLATFORM_DEFINITIONS: Record<string, SocialPlatformDefinition> = {
   twitter: {
     id: 'twitter',
     displayName: 'X (Twitter)',
     icon: '🐦',
-    color: '#1DA1F2',
-    isProOnly: false
+    color: '#1DA1F2'
   },
   whatsapp: {
     id: 'whatsapp',
     displayName: 'WhatsApp',
     icon: '💬',
-    color: '#25D366',
-    isProOnly: false
+    color: '#25D366'
   },
   instagram: {
     id: 'instagram',
     displayName: 'Instagram',
     icon: '📷',
-    color: '#E4405F',
-    isProOnly: true
+    color: '#E4405F'
   },
   facebook: {
     id: 'facebook',
     displayName: 'Facebook',
     icon: 'f',
-    color: '#1877F2',
-    isProOnly: true
+    color: '#1877F2'
   },
   discord: {
     id: 'discord',
     displayName: 'Discord',
     icon: '👾',
-    color: '#5865F2',
-    isProOnly: false // Move to free for testing
+    color: '#5865F2'
   },
   telegram: {
     id: 'telegram',
     displayName: 'Telegram',
     icon: '✈️',
-    color: '#0088cc',
-    isProOnly: true
+    color: '#0088cc'
   },
   reddit: {
     id: 'reddit',
     displayName: 'Reddit',
     icon: 'r/',
-    color: '#FF4500',
-    isProOnly: true
+    color: '#FF4500'
   },
   linkedin: {
     id: 'linkedin',
     displayName: 'LinkedIn',
     icon: 'in',
-    color: '#0A66C2',
-    isProOnly: false // Move to free for testing
+    color: '#0A66C2'
   }
 };
 
