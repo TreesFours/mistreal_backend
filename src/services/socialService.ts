@@ -236,17 +236,51 @@ export const disconnectPlatform = async (deviceId: string, platform: string) => 
         const user = await User.findOne({ where: { deviceId } });
         if (!user) return { success: false, error: 'User not found' };
 
+        const normalizedPlatform = platform.toLowerCase();
+
+        // If Zernio profile exists, issue real API delete to Zernio
+        if (user.zernioProfileId && process.env.ZERNIO_API_KEY) {
+            try {
+                const accounts = await ZernioAdapter.fetchAccounts(user.zernioProfileId);
+                const targetAccount = accounts.find((a: any) => (a.platform || '').toLowerCase() === normalizedPlatform);
+                if (targetAccount) {
+                    const accountId = targetAccount._id || targetAccount.id || targetAccount.accountId;
+                    await ZernioAdapter.deleteAccount(user.zernioProfileId, accountId);
+                    logger.info(`✅ Unlinked ${normalizedPlatform} account ${accountId} on Zernio.`);
+                }
+            } catch (zernioErr: any) {
+                logger.warn(`⚠️ Zernio deleteAccount warning: ${zernioErr.message}`);
+            }
+        }
+
         const connected = user.connectedPlatforms || [];
-        user.set('connectedPlatforms', connected.filter((p: any) => p.toLowerCase() !== platform.toLowerCase()));
+        user.set('connectedPlatforms', connected.filter((p: any) => p.toLowerCase() !== normalizedPlatform));
         user.changed('connectedPlatforms', true);
 
-        // Also clear profileId if it was a critical failure? No, usually keep it for reconnections.
-
         await user.save();
-        return { success: true, platform, message: `${platform} disconnected` };
+        return { success: true, platform, message: `${platform} disconnected successfully` };
     } catch (e: any) {
         throw new Error(`Disconnect failed: ${e.message}`);
     }
+};
+
+export const reconcileUserPlatforms = async (user: User) => {
+    if (!user.zernioProfileId || !process.env.ZERNIO_API_KEY) {
+        return user.connectedPlatforms || [];
+    }
+    try {
+        const accounts = await ZernioAdapter.fetchAccounts(user.zernioProfileId);
+        const verifiedPlatforms = accounts.map((a: any) => (a.platform || '').toLowerCase()).filter(Boolean);
+        if (verifiedPlatforms.length > 0) {
+            user.set('connectedPlatforms', verifiedPlatforms);
+            user.changed('connectedPlatforms', true);
+            await user.save();
+            return verifiedPlatforms;
+        }
+    } catch (e: any) {
+        logger.warn(`Platform reconciliation error: ${e.message}`);
+    }
+    return user.connectedPlatforms || [];
 };
 
 export const sendSocialAction = async (user: User, action: { platform: string, type: string, content: string, targetId?: string }) => {

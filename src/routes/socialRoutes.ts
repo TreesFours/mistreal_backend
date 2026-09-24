@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { Op } from 'sequelize';
 import { UnifiedSocialService } from '../services/socialPlatforms/unified';
-import { createConnectSession, getAvailablePlatforms, sendSocialAction, exchangeOAuthCode, disconnectPlatform, getPlatformContacts, getUnreadMessages, getSocialHistory } from '../services/socialService';
+import { createConnectSession, getAvailablePlatforms, sendSocialAction, exchangeOAuthCode, disconnectPlatform, getPlatformContacts, getUnreadMessages, getSocialHistory, reconcileUserPlatforms } from '../services/socialService';
 import { ZernioAdapter } from '../services/socialPlatforms/zernioAdapter';
 import { User, SocialEvent } from '../models/userModel';
 import { WebhookService } from '../services/webhookService';
@@ -35,11 +35,11 @@ router.get('/platforms', optionalAuthenticateUser, async (req: Request, res: Res
     try {
         const user = await getResolvedUser(req);
         const isPro = user?.isPro ?? false;
-        const connectedPlatforms = user?.connectedPlatforms || [];
+        const connectedPlatforms = user ? await reconcileUserPlatforms(user) : [];
         const platforms = await getAvailablePlatforms(isPro);
         const result = platforms.map(p => ({
             ...p,
-            isConnected: connectedPlatforms.includes(p.id)
+            isConnected: connectedPlatforms.map((cp: string) => cp.toLowerCase()).includes(p.id.toLowerCase())
         }));
         res.json(result);
     } catch (e: any) {
@@ -120,7 +120,10 @@ router.get('/callback', async (req: Request, res: Response) => {
         const baseUrl = process.env.APP_URL || 'https://mistreal-backend.onrender.com';
         await exchangeOAuthCode(deviceId, platform, (code || tempToken || 'ACCEPTED') as string, `${baseUrl}/api/social/callback`);
 
-        const appDeepLink = `mistreal://social-connected?platform=${platform}&success=true&deviceId=${deviceId}`;
+        const verifiedPlatforms = await reconcileUserPlatforms(user);
+        const isVerified = verifiedPlatforms.map(p => p.toLowerCase()).includes(platform.toLowerCase());
+
+        const appDeepLink = `mistreal://social-connected?platform=${platform}&success=${isVerified}&deviceId=${deviceId}`;
 
         // Return a friendly handshake page that redirects to the app
         res.send(`<html><body><script>window.location.href="${appDeepLink}";</script>Redirecting to Mistreal...</body></html>`);

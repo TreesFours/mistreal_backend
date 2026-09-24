@@ -254,5 +254,40 @@ export const ZernioAdapter = {
       console.error(`Zernio Contacts Fetch Error: ${e.message}`);
       return [];
     }
+  },
+
+  /**
+   * Fetch connected accounts for a Zernio Profile
+   * Verifies which platforms are actually linked and active.
+   */
+  fetchAccounts: async (profileId: string) => {
+    try {
+      if (!profileId) return [];
+      const response = await axios.get(`${ZERNIO_API_URL}/accounts`, {
+        params: { profileId },
+        headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
+      });
+      return response.data.accounts || response.data.data || [];
+    } catch (e: any) {
+      console.error(`Zernio Accounts Fetch Error [${profileId}]:`, e.response?.data || e.message);
+      return [];
+    }
+  },
+
+  /**
+   * Unlink/Delete an account from a Zernio Profile
+   */
+  deleteAccount: async (profileId: string, accountId: string) => {
+    try {
+      if (!profileId || !accountId) throw new Error('profileId and accountId are required for deletion.');
+      const response = await axios.delete(`${ZERNIO_API_URL}/accounts/${accountId}`, {
+        params: { profileId },
+        headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
+      });
+      return response.data;
+    } catch (e: any) {
+      console.error(`Zernio Delete Account Error [${accountId}]:`, e.response?.data || e.message);
+      throw new Error(`Failed to delete account from Zernio: ${e.response?.data?.error || e.message}`);
+    }
   }
 };
