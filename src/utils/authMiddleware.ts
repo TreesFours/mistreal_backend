@@ -44,3 +44,18 @@ export const authenticateUser = async (req: any, res: Response, next: NextFuncti
         return res.status(401).json({ error: 'Unauthorized: Invalid token' });
     }
 };
+
+export const optionalAuthenticateUser = async (req: any, res: Response, next: NextFunction) => {
+    const authHeader = req.headers.authorization;
+
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+        const idToken = authHeader.split('Bearer ')[1];
+        try {
+            const decodedToken = await admin.auth().verifyIdToken(idToken);
+            req.user = decodedToken;
+        } catch (error) {
+            logger.warn('Optional Firebase Auth Token invalid, falling back to device ID');
+        }
+    }
+    next();
+};

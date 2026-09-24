@@ -18,12 +18,10 @@ export const ZernioAdapter = {
    */
   getOrCreateProfile: async (deviceId: string) => {
     try {
-      // First, try to find if we've stored a profileId for this deviceId in our DB
-      // (Implementation note: You should add a 'zernioProfileId' field to your User model)
-
+      const safeId = (deviceId || 'device_default').toString();
       const response = await axios.post(`${ZERNIO_API_URL}/profiles`, {
-        name: `User ${deviceId.slice(0, 6)}`,
-        description: `Mistreal Agent Profile for device ${deviceId}`
+        name: `User ${safeId.slice(0, 6)}`,
+        description: `Mistreal Agent Profile for device ${safeId}`
       }, {
         headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
       });
@@ -56,7 +54,6 @@ export const ZernioAdapter = {
             profileId,
             scope,
             state,
-            headless: 'true',
             redirect_url: callbackUrl
         },
         headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
@@ -202,12 +199,13 @@ export const ZernioAdapter = {
       const selectedAccount = pages[0];
       const accountId = selectedAccount.id || selectedAccount.accountId || selectedAccount._id || selectedAccount.username;
 
+      const baseUrl = process.env.APP_URL || 'https://mistreal-backend.onrender.com';
       const selectResp = await axios.post(`${ZERNIO_API_URL}/connect/${platform}/select`, {
         profileId,
         tempToken,
         accountId,
         userProfile: userProfile ? JSON.parse(decodeURIComponent(userProfile)) : undefined,
-        redirect_url: 'https://mistreal-backend.onrender.com/api/social/callback/success' // Internal marker
+        redirect_url: `${baseUrl}/api/social/callback/success`
       }, {
         headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
       });
