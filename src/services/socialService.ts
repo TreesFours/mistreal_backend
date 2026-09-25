@@ -131,6 +131,29 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
 };
 
 /**
+ * 🔄 Helper: Normalize platform aliases between Zernio API and Mistreal app IDs
+ */
+export const normalizePlatformId = (platform: string): string => {
+    if (!platform) return '';
+    const lower = platform.toLowerCase().trim();
+    if (lower === 'x' || lower === 'twitter') return 'twitter';
+    if (lower.startsWith('linkedin')) return 'linkedin';
+    if (lower.startsWith('facebook')) return 'facebook';
+    if (lower.startsWith('instagram')) return 'instagram';
+    if (lower.startsWith('whatsapp')) return 'whatsapp';
+    if (lower.startsWith('youtube')) return 'youtube';
+    if (lower.startsWith('tiktok')) return 'tiktok';
+    if (lower.startsWith('telegram')) return 'telegram';
+    if (lower.startsWith('discord')) return 'discord';
+    if (lower.startsWith('reddit')) return 'reddit';
+    return lower;
+};
+
+export const isPlatformMatching = (platformA: string, platformB: string): boolean => {
+    return normalizePlatformId(platformA) === normalizePlatformId(platformB);
+};
+
+/**
  * 🔗 Headless Zernio Session: Bypasses their dashboard with fallback routing
  */
 export const createConnectSession = async (platform: string, deviceId: string, callbackUrl: string) => {
@@ -138,6 +161,8 @@ export const createConnectSession = async (platform: string, deviceId: string, c
     if (!user) {
         user = await User.create({ deviceId, connectedPlatforms: [] });
     }
+
+    const normPlatform = normalizePlatformId(platform);
 
     // 🛡️ TIER LIMIT ENFORCEMENT
     const tier = user.subscriptionTier?.toLowerCase() || 'free';
@@ -151,10 +176,10 @@ export const createConnectSession = async (platform: string, deviceId: string, c
         limit = 99;
     }
 
-    const currentConnected = user.connectedPlatforms || [];
+    const currentConnected = (user.connectedPlatforms || []).map(p => normalizePlatformId(p));
 
     // Allow re-connecting an existing platform, but block NEW ones if limit reached
-    if (!currentConnected.map(p => p.toLowerCase()).includes(platform.toLowerCase()) && currentConnected.length >= limit) {
+    if (!currentConnected.includes(normPlatform) && currentConnected.length >= limit) {
         const tierLabel = tier === 'free' ? 'Free tier' : tier === 'premium1' ? 'Premium 1' : 'Your subscription';
         throw new Error(`LIMIT_REACHED: ${tierLabel} is limited to ${limit} social connection${limit === 1 ? '' : 's'}.`);
     }
@@ -167,39 +192,45 @@ export const createConnectSession = async (platform: string, deviceId: string, c
                 await user.save();
             }
 
-            const state = Buffer.from(JSON.stringify({ deviceId, platform }))
+            const state = Buffer.from(JSON.stringify({ deviceId, platform: normPlatform }))
                 .toString('base64')
                 .replace(/\+/g, '-')
                 .replace(/\//g, '_')
                 .replace(/=+$/, '');
 
-            const fallbackCallback = `${callbackUrl}${callbackUrl.includes('?') ? '&' : '?'}deviceId=${deviceId}&platform=${platform}`;
-            const scope = platform.toLowerCase() === 'linkedin'
+            const fallbackCallback = `${callbackUrl}${callbackUrl.includes('?') ? '&' : '?'}deviceId=${deviceId}&platform=${normPlatform}`;
+            const scope = normPlatform === 'linkedin'
                 ? 'r_liteprofile,r_emailaddress,w_member_social'
                 : undefined;
 
-            const authUrl = await ZernioAdapter.getAuthUrl(platform, user.zernioProfileId!, scope, state, fallbackCallback);
+            const authUrl = await ZernioAdapter.getAuthUrl(normPlatform, user.zernioProfileId!, scope, state, fallbackCallback);
             if (authUrl && typeof authUrl === 'string' && authUrl.startsWith('http')) {
                 return authUrl;
             }
         } catch (zernioError: any) {
-            logger.warn(`⚠️ Zernio connection failed (${zernioError.message}). Attempting direct/fallback connector...`);
+            logger.warn(`⚠️ Zernio connection warning (${zernioError.message}). Attempting direct/fallback connector...`);
+            if (zernioError.message && zernioError.message.includes('LIMIT_REACHED')) {
+                throw zernioError;
+            }
         }
     }
 
     // 2. Direct OAuth Handlers if client credentials are present
-    const normalizedPlatform = platform.toLowerCase();
-    if (normalizedPlatform === 'facebook' && process.env.FACEBOOK_CLIENT_ID) {
+    if (normPlatform === 'facebook' && process.env.FACEBOOK_CLIENT_ID) {
         return FacebookOAuth.getAuthUrl(deviceId, callbackUrl);
-    } else if (normalizedPlatform === 'linkedin' && process.env.LINKEDIN_CLIENT_ID) {
+    } else if (normPlatform === 'linkedin' && process.env.LINKEDIN_CLIENT_ID) {
         return LinkedInOAuth.getAuthUrl(deviceId, callbackUrl);
-    } else if ((normalizedPlatform === 'twitter' || normalizedPlatform === 'x') && process.env.TWITTER_CLIENT_ID) {
+    } else if (normPlatform === 'twitter' && process.env.TWITTER_CLIENT_ID) {
         return TwitterOAuth.getAuthUrl(deviceId, callbackUrl);
     }
 
-    // 3. Fallback: Direct Handshake Callback URL
-    const fallbackUrl = `${callbackUrl}${callbackUrl.includes('?') ? '&' : '?'}deviceId=${deviceId}&platform=${platform}&tempToken=MOCK_CONNECT_${Date.now()}`;
-    return fallbackUrl;
+    // 3. Fallback: Direct Handshake Callback URL if Zernio API key is present
+    if (process.env.ZERNIO_API_KEY) {
+        const fallbackUrl = `${callbackUrl}${callbackUrl.includes('?') ? '&' : '?'}deviceId=${deviceId}&platform=${normPlatform}&tempToken=MOCK_CONNECT_${Date.now()}`;
+        return fallbackUrl;
+    }
+
+    throw new Error(`Social connection provider for ${platform} is not configured on backend.`);
 };
 
 export const exchangeOAuthCode = async (deviceId: string, platform: string, code: string, callbackUrl: string) => {
@@ -209,10 +240,10 @@ export const exchangeOAuthCode = async (deviceId: string, platform: string, code
     }
 
     const connected = user.connectedPlatforms || [];
-    const normalizedPlatform = platform.toLowerCase();
+    const normPlatform = normalizePlatformId(platform);
 
-    if (!connected.map((p: any) => p.toLowerCase()).includes(normalizedPlatform)) {
-        connected.push(normalizedPlatform);
+    if (!connected.map((p: any) => normalizePlatformId(p)).includes(normPlatform)) {
+        connected.push(normPlatform);
         user.set('connectedPlatforms', connected);
         user.changed('connectedPlatforms', true);
     }
@@ -225,10 +256,10 @@ export const exchangeOAuthCode = async (deviceId: string, platform: string, code
         }
     }
 
-    if (normalizedPlatform === 'linkedin') user.linkedinAccessToken = 'MANAGED';
+    if (normPlatform === 'linkedin') user.linkedinAccessToken = 'MANAGED';
 
     await user.save();
-    logger.info(`✅ ${normalizedPlatform} connection saved for device ${deviceId}`);
+    logger.info(`✅ ${normPlatform} connection saved for device ${deviceId}`);
 };
 
 export const disconnectPlatform = async (deviceId: string, platform: string) => {
@@ -236,17 +267,17 @@ export const disconnectPlatform = async (deviceId: string, platform: string) => 
         const user = await User.findOne({ where: { deviceId } });
         if (!user) return { success: false, error: 'User not found' };
 
-        const normalizedPlatform = platform.toLowerCase();
+        const normPlatform = normalizePlatformId(platform);
 
         // If Zernio profile exists, issue real API delete to Zernio
         if (user.zernioProfileId && process.env.ZERNIO_API_KEY) {
             try {
                 const accounts = await ZernioAdapter.fetchAccounts(user.zernioProfileId);
-                const targetAccount = accounts.find((a: any) => (a.platform || '').toLowerCase() === normalizedPlatform);
+                const targetAccount = accounts.find((a: any) => isPlatformMatching(a.platform || a.type || '', normPlatform));
                 if (targetAccount) {
                     const accountId = targetAccount._id || targetAccount.id || targetAccount.accountId;
                     await ZernioAdapter.deleteAccount(user.zernioProfileId, accountId);
-                    logger.info(`✅ Unlinked ${normalizedPlatform} account ${accountId} on Zernio.`);
+                    logger.info(`✅ Unlinked ${normPlatform} account ${accountId} on Zernio.`);
                 }
             } catch (zernioErr: any) {
                 logger.warn(`⚠️ Zernio deleteAccount warning: ${zernioErr.message}`);
@@ -254,33 +285,38 @@ export const disconnectPlatform = async (deviceId: string, platform: string) => 
         }
 
         const connected = user.connectedPlatforms || [];
-        user.set('connectedPlatforms', connected.filter((p: any) => p.toLowerCase() !== normalizedPlatform));
+        user.set('connectedPlatforms', connected.filter((p: any) => !isPlatformMatching(p, normPlatform)));
         user.changed('connectedPlatforms', true);
 
         await user.save();
-        return { success: true, platform, message: `${platform} disconnected successfully` };
+        return { success: true, platform: normPlatform, message: `${platform} disconnected successfully` };
     } catch (e: any) {
         throw new Error(`Disconnect failed: ${e.message}`);
     }
 };
 
-export const reconcileUserPlatforms = async (user: User) => {
+export const reconcileUserPlatforms = async (user: User): Promise<string[]> => {
+    const existingConnected = (user.connectedPlatforms || []).map((p: string) => normalizePlatformId(p)).filter(Boolean);
     if (!user.zernioProfileId || !process.env.ZERNIO_API_KEY) {
-        return user.connectedPlatforms || [];
+        return Array.from(new Set(existingConnected));
     }
     try {
         const accounts = await ZernioAdapter.fetchAccounts(user.zernioProfileId);
-        const verifiedPlatforms = accounts.map((a: any) => (a.platform || '').toLowerCase()).filter(Boolean);
-        if (verifiedPlatforms.length > 0) {
-            user.set('connectedPlatforms', verifiedPlatforms);
+        const zernioPlatforms = accounts
+            .map((a: any) => normalizePlatformId(a.platform || a.type || ''))
+            .filter(Boolean);
+
+        const allConnected = Array.from(new Set([...existingConnected, ...zernioPlatforms]));
+        if (JSON.stringify(allConnected.sort()) !== JSON.stringify(existingConnected.sort())) {
+            user.set('connectedPlatforms', allConnected);
             user.changed('connectedPlatforms', true);
             await user.save();
-            return verifiedPlatforms;
         }
+        return allConnected;
     } catch (e: any) {
         logger.warn(`Platform reconciliation error: ${e.message}`);
+        return Array.from(new Set(existingConnected));
     }
-    return user.connectedPlatforms || [];
 };
 
 export const sendSocialAction = async (user: User, action: { platform: string, type: string, content: string, targetId?: string }) => {

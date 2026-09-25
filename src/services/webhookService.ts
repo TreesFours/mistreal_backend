@@ -6,6 +6,7 @@ import * as admin from 'firebase-admin';
 import logger from '../utils/logger';
 import { User, SocialEvent, DelayedAction, sequelize } from '../models/userModel';
 import { getAiResponse } from './aiService';
+import { normalizePlatformId, isPlatformMatching } from './socialService';
 
 export class WebhookService {
 // ... (rest of the imports/class structure)
@@ -312,19 +313,21 @@ export class WebhookService {
 
     private static async handleAccountConnected(user: any, data: any, platform: string, transaction: any) {
         const connected = user.connectedPlatforms || [];
-        if (!connected.includes(platform.toLowerCase())) {
-            connected.push(platform.toLowerCase());
+        const normPlatform = normalizePlatformId(platform || data?.platform || '');
+        if (normPlatform && !connected.some((p: string) => isPlatformMatching(p, normPlatform))) {
+            connected.push(normPlatform);
             user.connectedPlatforms = connected;
             await user.save({ transaction });
-            logger.info(`✅ [${platform}] Account connection secured via Webhook.`);
+            logger.info(`✅ [${normPlatform}] Account connection secured via Webhook.`);
         }
     }
 
     private static async handleAccountDisconnected(user: any, data: any, platform: string, transaction: any) {
         const connected = user.connectedPlatforms || [];
-        user.connectedPlatforms = connected.filter((p: string) => p !== platform.toLowerCase());
+        const normPlatform = normalizePlatformId(platform || data?.platform || '');
+        user.connectedPlatforms = connected.filter((p: string) => !isPlatformMatching(p, normPlatform));
         await user.save({ transaction });
-        logger.warn(`🛑 [${platform}] Account disconnected via Webhook.`);
+        logger.warn(`🛑 [${normPlatform}] Account disconnected via Webhook.`);
     }
 
     private static async handlePostPublished(user: any, data: any, platform: string, transaction: any) {

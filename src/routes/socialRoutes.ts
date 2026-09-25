@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { Op } from 'sequelize';
 import { UnifiedSocialService } from '../services/socialPlatforms/unified';
-import { createConnectSession, getAvailablePlatforms, sendSocialAction, exchangeOAuthCode, disconnectPlatform, getPlatformContacts, getUnreadMessages, getSocialHistory, reconcileUserPlatforms } from '../services/socialService';
+import { createConnectSession, getAvailablePlatforms, sendSocialAction, exchangeOAuthCode, disconnectPlatform, getPlatformContacts, getUnreadMessages, getSocialHistory, reconcileUserPlatforms, normalizePlatformId, isPlatformMatching } from '../services/socialService';
 import { ZernioAdapter } from '../services/socialPlatforms/zernioAdapter';
 import { User, SocialEvent } from '../models/userModel';
 import { WebhookService } from '../services/webhookService';
@@ -39,7 +39,7 @@ router.get('/platforms', optionalAuthenticateUser, async (req: Request, res: Res
         const platforms = await getAvailablePlatforms(isPro);
         const result = platforms.map(p => ({
             ...p,
-            isConnected: connectedPlatforms.map((cp: string) => cp.toLowerCase()).includes(p.id.toLowerCase())
+            isConnected: connectedPlatforms.some((cp: string) => isPlatformMatching(cp, p.id))
         }));
         res.json(result);
     } catch (e: any) {
@@ -66,13 +66,15 @@ router.post('/init-connection', optionalAuthenticateUser, async (req: Request, r
         return res.status(200).json({ success: false, error: 'User resolve failed' });
     }
 
+    const normPlatform = normalizePlatformId(platform);
+
     try {
         // Generate a state containing the deviceId so we can map it back in callback
-        const state = Buffer.from(JSON.stringify({ deviceId: user.deviceId, platform })).toString('base64');
+        const state = Buffer.from(JSON.stringify({ deviceId: user.deviceId, platform: normPlatform })).toString('base64');
         const baseUrl = process.env.APP_URL || 'https://mistreal-backend.onrender.com';
         const callbackUrl = `${baseUrl}/api/social/callback?state=${state}`;
 
-        const authUrl = await createConnectSession(platform, user.deviceId, callbackUrl);
+        const authUrl = await createConnectSession(normPlatform, user.deviceId, callbackUrl);
         return res.status(200).json({ success: true, connectUrl: authUrl });
     } catch (error: any) {
         logger.error(`❌ init-connection failed for platform ${platform}: ${error.message}`);
@@ -106,6 +108,8 @@ router.get('/callback', async (req: Request, res: Response) => {
             return res.status(400).send('Invalid callback parameters');
         }
 
+        const normPlatform = normalizePlatformId(platform);
+
         let user = await User.findOne({ where: { deviceId } });
         if (!user) {
             user = await User.create({ deviceId, connectedPlatforms: [] });
@@ -118,12 +122,13 @@ router.get('/callback', async (req: Request, res: Response) => {
         }
 
         const baseUrl = process.env.APP_URL || 'https://mistreal-backend.onrender.com';
-        await exchangeOAuthCode(deviceId, platform, (code || tempToken || 'ACCEPTED') as string, `${baseUrl}/api/social/callback`);
+        await exchangeOAuthCode(deviceId, normPlatform, (code || tempToken || 'ACCEPTED') as string, `${baseUrl}/api/social/callback`);
 
         const verifiedPlatforms = await reconcileUserPlatforms(user);
-        const isVerified = verifiedPlatforms.map(p => p.toLowerCase()).includes(platform.toLowerCase());
+        const isVerified = verifiedPlatforms.some(p => isPlatformMatching(p, normPlatform)) ||
+                           (user.connectedPlatforms || []).some(p => isPlatformMatching(p, normPlatform));
 
-        const appDeepLink = `mistreal://social-connected?platform=${platform}&success=${isVerified}&deviceId=${deviceId}`;
+        const appDeepLink = `mistreal://social-connected?platform=${normPlatform}&success=${isVerified}&deviceId=${deviceId}`;
 
         // Return a friendly handshake page that redirects to the app
         res.send(`<html><body><script>window.location.href="${appDeepLink}";</script>Redirecting to Mistreal...</body></html>`);
