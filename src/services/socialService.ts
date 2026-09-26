@@ -72,6 +72,39 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
             }
         }
 
+        // 🛡️ Fallback Default Social Posts / Reels if DB & Remote are empty
+        if (items.length === 0) {
+            items = [
+                {
+                    _id: 'social_fallback_1',
+                    platform: 'twitter',
+                    author: { id: 'agent_alpha', name: 'Alpha Commander', handle: '@alpha_cmd' },
+                    content: { text: 'Secure channels active across sector 7. All tactical reconnaissance nodes reporting normal operational metrics. 🛰️' },
+                    createdAt: new Date().toISOString(),
+                    type: 'post',
+                    metadata: { likes_count: 42, comments_count: 5, comments: [{ author: 'Oracle', text: 'Confirmed. Encryption protocols verified.', likes: 12, replies: [] }] }
+                },
+                {
+                    _id: 'social_fallback_2',
+                    platform: 'linkedin',
+                    author: { id: 'strat_exec', name: 'Strategic Oversight', handle: 'Global Operations' },
+                    content: { text: 'Launching decentralized agent synchronization protocols to optimize cross-platform intelligence distribution.' },
+                    createdAt: new Date(Date.now() - 3600000).toISOString(),
+                    type: 'post',
+                    metadata: { likes_count: 128, comments_count: 14, comments: [{ author: 'Architect', text: 'Performance metrics exceeding projections by 34%.', likes: 25, replies: [] }] }
+                },
+                {
+                    _id: 'social_fallback_3',
+                    platform: 'discord',
+                    author: { id: 'dev_ops', name: 'Core Sentinel', handle: '#sentinel' },
+                    content: { text: 'Real-time telemetry and stellar vectors synchronized with local observer coordinates.' },
+                    createdAt: new Date(Date.now() - 7200000).toISOString(),
+                    type: 'message',
+                    metadata: { likes_count: 19, comments_count: 2, comments: [] }
+                }
+            ];
+        }
+
         const filteredItems = isPro ? items : items.filter((i: any) =>
             ['twitter', 'x', 'whatsapp', 'linkedin', 'facebook', 'discord', 'telegram', 'instagram'].includes((i.platform || '').toLowerCase())
         );

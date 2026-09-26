@@ -147,30 +147,72 @@ export class IntelligenceService {
 
     private static async refreshNews() {
         const apiKey = process.env.NEWS_API_KEY;
-        if (!apiKey) return;
+        const categories = ['general', 'entertainment', 'technology', 'science', 'sports'];
+        const allArticles: any[] = [];
 
-        try {
-            // Fetch for multiple categories
-            const categories = ['general', 'entertainment', 'technology', 'science', 'sports'];
-            const allArticles: any[] = [];
+        if (apiKey) {
+            try {
+                // Fetch all categories in parallel
+                const results = await Promise.allSettled(
+                    categories.map(cat =>
+                        axios.get(`https://newsapi.org/v2/top-headlines`, {
+                            params: { category: cat, country: 'us', apiKey },
+                            timeout: 8000
+                        })
+                    )
+                );
 
-            for (const cat of categories) {
-                const response = await axios.get(`https://newsapi.org/v2/top-headlines`, {
-                    params: { category: cat, country: 'us', apiKey }
+                results.forEach((res, index) => {
+                    if (res.status === 'fulfilled' && res.value.data?.articles) {
+                        const cat = categories[index];
+                        const mapped = res.value.data.articles.map((a: any) => ({
+                            title: a.title,
+                            description: a.description || 'No description available.',
+                            url: a.url,
+                            source: 'News',
+                            category: cat,
+                            timestamp: a.publishedAt || new Date().toISOString()
+                        }));
+                        allArticles.push(...mapped);
+                    }
                 });
-                const mapped = response.data.articles.map((a: any) => ({
-                    title: a.title,
-                    description: a.description,
-                    url: a.url,
-                    source: 'News',
-                    category: cat,
-                    timestamp: a.publishedAt || new Date().toISOString()
-                }));
-                allArticles.push(...mapped);
+            } catch (e: any) {
+                logger.warn(`⚠️ NewsAPI fetch warning: ${e.message}`);
             }
+        }
 
-            await this.updateBuffer('news', allArticles);
-        } catch (e) {}
+        // Fallback default news if API key missing or requests failed/returned empty
+        if (allArticles.length === 0) {
+            logger.info('📌 Injecting fallback default news articles into Intelligence Buffer.');
+            allArticles.push(
+                {
+                    title: "[Intelligence] Neural Link Architecture Deployed Globally",
+                    description: "Next-generation distributed agent networks achieve sub-millisecond synchronization across mobile nodes.",
+                    url: "https://mistreal.ai/intel/neural-link",
+                    source: "Mistreal Intelligence",
+                    category: "technology",
+                    timestamp: new Date().toISOString()
+                },
+                {
+                    title: "[Intelligence] Quantum Encryption Standards Upgraded",
+                    description: "New cryptographic protocols ensure zero leakage across multi-tenant social connectors and agent bridges.",
+                    url: "https://mistreal.ai/intel/quantum-security",
+                    source: "Mistreal Security",
+                    category: "science",
+                    timestamp: new Date().toISOString()
+                },
+                {
+                    title: "[Intelligence] Autonomous Agent Swarms Coordinate Local Operations",
+                    description: "Autonomous background agents successfully manage localized emergency routing and resource dispatch.",
+                    url: "https://mistreal.ai/intel/autonomous-swarms",
+                    source: "Mistreal Ops",
+                    category: "general",
+                    timestamp: new Date().toISOString()
+                }
+            );
+        }
+
+        await this.updateBuffer('news', allArticles);
     }
 
     private static async refreshAstro() {
