@@ -40,7 +40,7 @@ export class WebhookService {
     static async handleEvent(event: any) {
         // 🛡️ ADAPTIVE PAYLOAD RESOLUTION
         // Support both Zernio standard and "Late" (internal engine) payload shapes
-        const type = event.event || event.type;
+        const type = (event.event || event.type || '').toLowerCase();
         const data = event.data || event.account || event.message || event.comment;
         const platform = event.platform || data?.platform;
 
@@ -73,12 +73,36 @@ export class WebhookService {
                 case 'message.created':
                     await this.handleIncomingMessage(user, data, platform, transaction);
                     break;
+                case 'message.sent':
+                    await this.handleMessageSent(user, data, platform, transaction);
+                    break;
+                case 'message.edited':
+                    await this.handleMessageEdited(user, data, platform, transaction);
+                    break;
+                case 'message.deleted':
+                    await this.handleMessageDeleted(user, data, platform, transaction);
+                    break;
+                case 'message.delivered':
+                    await this.handleMessageDelivered(user, data, platform, transaction);
+                    break;
                 case 'message.read':
                     await this.handleMessageRead(user, data, platform, transaction);
+                    break;
+                case 'message.failed':
+                    await this.handleMessageFailed(user, data, platform, transaction);
+                    break;
+                case 'reaction.received':
+                    await this.handleReactionReceived(user, data, platform, transaction);
                     break;
                 case 'comment.received':
                 case 'comment.created':
                     await this.handleCommentReceived(user, data, platform, transaction);
+                    break;
+                case 'post.published':
+                    await this.handlePostPublished(user, data, platform, transaction);
+                    break;
+                case 'post.failed':
+                    await this.handlePostFailed(user, data, platform, transaction);
                     break;
                 case 'account.connected':
                     await this.handleAccountConnected(user, data, platform, transaction);
@@ -86,11 +110,28 @@ export class WebhookService {
                 case 'account.disconnected':
                     await this.handleAccountDisconnected(user, data, platform, transaction);
                     break;
-                case 'post.published':
-                    await this.handlePostPublished(user, data, platform, transaction);
+                case 'call.received':
+                case 'call.incoming':
+                    await this.handleIncomingCall(user, data, platform, transaction);
                     break;
-                case 'message.sent':
-                    await this.handleMessageSent(user, data, platform, transaction);
+                case 'call.ended':
+                    await this.handleCallEnded(user, data, platform, transaction);
+                    break;
+                case 'call.failed':
+                    await this.handleCallFailed(user, data, platform, transaction);
+                    break;
+                case 'whatsapp.template.status':
+                    await this.handleWhatsAppTemplateUpdate(user, data, transaction);
+                    break;
+                case 'whatsapp.number.activated':
+                case 'whatsapp.number.disconnected':
+                case 'whatsapp.number.action':
+                case 'whatsapp.number.verified':
+                    await this.handleWhatsAppNumberEvent(user, type, data, transaction);
+                    break;
+                case 'verification.approved':
+                case 'verification.failed':
+                    await this.handleVerificationEvent(user, type, data, transaction);
                     break;
                 default:
                     logger.debug(`ℹ️ Passive event ${type} logged for device ${user.deviceId}.`);
@@ -370,5 +411,94 @@ export class WebhookService {
         }, { transaction });
 
         logger.info(`📤 [${platform}] Outgoing message persisted to history.`);
+    }
+
+    private static async handlePostFailed(user: any, data: any, platform: string, transaction: any) {
+        logger.error(`❌ [${platform}] Post publication failed: ${data?.error || 'Unknown error'}`);
+        const unreadMetadata = { ...(user.preferences?.unreadMetadata || {}) };
+        unreadMetadata['system_alerts'] = unreadMetadata['system_alerts'] || [];
+        unreadMetadata['system_alerts'].push({
+            type: 'post_failed',
+            platform: platform || 'social',
+            error: data?.error || 'Publishing failed',
+            timestamp: new Date().toISOString()
+        });
+        user.set('preferences', { ...user.preferences, unreadMetadata });
+        user.changed('preferences', true);
+        await user.save({ transaction });
+    }
+
+    private static async handleMessageEdited(user: any, data: any, platform: string, transaction: any) {
+        logger.info(`✏️ [${platform}] Message edited: ${data?.message_id || data?.id}`);
+        await SocialEvent.update(
+            { content: data?.content?.text || data?.text || "" },
+            { where: { deviceId: user.deviceId, externalId: data?.message_id || data?.id }, transaction }
+        );
+    }
+
+    private static async handleMessageDeleted(user: any, data: any, platform: string, transaction: any) {
+        logger.info(`🗑️ [${platform}] Message deleted: ${data?.message_id || data?.id}`);
+        await SocialEvent.destroy({
+            where: { deviceId: user.deviceId, externalId: data?.message_id || data?.id },
+            transaction
+        });
+    }
+
+    private static async handleMessageDelivered(user: any, data: any, platform: string, transaction: any) {
+        logger.info(`✓✓ [${platform}] Message delivered: ${data?.message_id || data?.id}`);
+    }
+
+    private static async handleMessageFailed(user: any, data: any, platform: string, transaction: any) {
+        logger.error(`❌ [${platform}] Message delivery failed: ${data?.error || 'Unknown'}`);
+    }
+
+    private static async handleReactionReceived(user: any, data: any, platform: string, transaction: any) {
+        logger.info(`❤️ [${platform}] Reaction received from ${data?.sender?.name || 'User'}`);
+        await SocialEvent.create({
+            deviceId: user.deviceId,
+            platform: (platform || 'social').toLowerCase(),
+            type: 'reaction',
+            externalId: data?.reaction_id || `reaction_${Date.now()}`,
+            senderId: data?.sender?.id,
+            senderName: data?.sender?.name || 'User',
+            content: `Reacted with ${data?.emoji || data?.reaction || '❤️'}`,
+            metadata: data,
+            timestamp: new Date(),
+            isRead: false
+        }, { transaction });
+    }
+
+    private static async handleCallFailed(user: any, data: any, platform: string, transaction: any) {
+        logger.error(`❌ [${platform || 'system'}] Call failed: ${data?.error || 'Unknown'}`);
+    }
+
+    private static async handleWhatsAppNumberEvent(user: any, eventType: string, data: any, transaction: any) {
+        logger.info(`📱 [WhatsApp Number Event] ${eventType}: ${JSON.stringify(data)}`);
+        const unreadMetadata = { ...(user.preferences?.unreadMetadata || {}) };
+        unreadMetadata['system_alerts'] = unreadMetadata['system_alerts'] || [];
+        unreadMetadata['system_alerts'].push({
+            type: 'whatsapp_number_event',
+            event: eventType,
+            data,
+            timestamp: new Date().toISOString()
+        });
+        user.set('preferences', { ...user.preferences, unreadMetadata });
+        user.changed('preferences', true);
+        await user.save({ transaction });
+    }
+
+    private static async handleVerificationEvent(user: any, eventType: string, data: any, transaction: any) {
+        logger.info(`🛡️ [Verification Event] ${eventType}: ${JSON.stringify(data)}`);
+        const unreadMetadata = { ...(user.preferences?.unreadMetadata || {}) };
+        unreadMetadata['system_alerts'] = unreadMetadata['system_alerts'] || [];
+        unreadMetadata['system_alerts'].push({
+            type: 'verification_event',
+            event: eventType,
+            data,
+            timestamp: new Date().toISOString()
+        });
+        user.set('preferences', { ...user.preferences, unreadMetadata });
+        user.changed('preferences', true);
+        await user.save({ transaction });
     }
 }
