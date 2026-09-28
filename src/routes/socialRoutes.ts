@@ -130,8 +130,34 @@ router.get('/callback', async (req: Request, res: Response) => {
 
         const appDeepLink = `mistreal://social-connected?platform=${normPlatform}&success=${isVerified}&deviceId=${deviceId}`;
 
-        // Return a friendly handshake page that redirects to the app
-        res.send(`<html><body><script>window.location.href="${appDeepLink}";</script>Redirecting to Mistreal...</body></html>`);
+        // Return a professional success handshake page with auto-redirect AND a manual return button
+        res.send(`
+            <html>
+                <head>
+                    <meta name="viewport" content="width=device-width, initial-scale=1">
+                    <style>
+                        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; text-align: center; }
+                        .card { background: #1e293b; padding: 32px; border-radius: 16px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.3); max-width: 400px; width: 90%; }
+                        h2 { color: #4ade80; margin-bottom: 12px; }
+                        p { color: #94a3b8; margin-bottom: 24px; font-size: 14px; }
+                        .btn { display: inline-block; background: #6366f1; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 16px; transition: background 0.2s; }
+                        .btn:hover { background: #4f46e5; }
+                    </style>
+                    <script>
+                        setTimeout(function() {
+                            window.location.href = "${appDeepLink}";
+                        }, 500);
+                    </script>
+                </head>
+                <body>
+                    <div class="card">
+                        <h2>✅ Connected Successfully!</h2>
+                        <p>Your ${normPlatform} account has been successfully linked. Tap below to return to Mistreal.</p>
+                        <a href="${appDeepLink}" class="btn">Return to Mistreal App</a>
+                    </div>
+                </body>
+            </html>
+        `);
     } catch (error: any) {
         logger.error(`❌ Callback processing error: ${error.message}`);
         res.status(500).send(`Connection failed: ${error.message}`);
