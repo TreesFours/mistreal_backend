@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const ZERNIO_API_URL = 'https://zernio.com/api/v1'; // Official Base URL
-const getApiKey = () => process.env.getApiKey() || '';
+const getApiKey = () => process.env.ZERNIO_API_KEY || '';
 
 /**
  * 🚀 OFFICIAL ZERNIO SDK-ALIGNED ADAPTER
