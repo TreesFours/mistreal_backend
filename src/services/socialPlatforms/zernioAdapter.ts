@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const ZERNIO_API_URL = 'https://zernio.com/api/v1'; // Official Base URL
-const ZERNIO_API_KEY = process.env.ZERNIO_API_KEY || '';
+const getApiKey = () => process.env.getApiKey() || '';
 
 /**
  * 🚀 OFFICIAL ZERNIO SDK-ALIGNED ADAPTER
@@ -23,7 +23,7 @@ export const ZernioAdapter = {
         name: `User ${safeId.slice(0, 6)}`,
         description: `Mistreal Agent Profile for device ${safeId}`
       }, {
-        headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
+        headers: { 'Authorization': `Bearer ${getApiKey()}` }
       });
 
       return response.data.profile._id; // The 24-char MongoDB ID
@@ -56,7 +56,7 @@ export const ZernioAdapter = {
             state,
             redirect_url: callbackUrl
         },
-        headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
+        headers: { 'Authorization': `Bearer ${getApiKey()}` }
       });
 
       // 🛡️ Double Check: Ensure Zernio isn't ignoring our redirect_uri
@@ -83,7 +83,7 @@ export const ZernioAdapter = {
       if (!profileId) throw new Error('Security Error: profileId is required for data isolation.');
       const response = await axios.get(`${ZERNIO_API_URL}/inbox`, {
         params: { profileId },
-        headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
+        headers: { 'Authorization': `Bearer ${getApiKey()}` }
       });
       return response.data.items || [];
     } catch (error: any) {
@@ -101,7 +101,7 @@ export const ZernioAdapter = {
       if (!profileId) throw new Error('profileId required');
       const response = await axios.get(`${ZERNIO_API_URL}/feed`, {
         params: { profileId },
-        headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
+        headers: { 'Authorization': `Bearer ${getApiKey()}` }
       });
       return response.data.items || [];
     } catch (error: any) {
@@ -119,7 +119,7 @@ export const ZernioAdapter = {
 
       const accountsResp = await axios.get(`${ZERNIO_API_URL}/accounts`, {
         params: { profileId },
-        headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
+        headers: { 'Authorization': `Bearer ${getApiKey()}` }
       });
 
       const account = accountsResp.data.accounts.find((a: any) => a.platform === platform);
@@ -133,7 +133,7 @@ export const ZernioAdapter = {
           type: type.toLowerCase(),
           targetId: targetId
         }, {
-          headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
+          headers: { 'Authorization': `Bearer ${getApiKey()}` }
         });
         return response.data;
       }
@@ -145,7 +145,7 @@ export const ZernioAdapter = {
             recipientId: targetId,
             content: { text: content }
         }, {
-            headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
+            headers: { 'Authorization': `Bearer ${getApiKey()}` }
         });
         return response.data;
       }
@@ -164,7 +164,7 @@ export const ZernioAdapter = {
       }
 
       const response = await axios.post(`${ZERNIO_API_URL}/posts`, postData, {
-        headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
+        headers: { 'Authorization': `Bearer ${getApiKey()}` }
       });
 
       return response.data;
@@ -185,7 +185,7 @@ export const ZernioAdapter = {
       // 1. List available accounts for this platform connection
       const listResp = await axios.get(`${ZERNIO_API_URL}/connect/${platform}/pages`, {
         params: { profileId, tempToken },
-        headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
+        headers: { 'Authorization': `Bearer ${getApiKey()}` }
       });
 
       // Zernio sometimes returns data in 'pages', 'elements', or 'accounts' depending on the platform
@@ -207,7 +207,7 @@ export const ZernioAdapter = {
         userProfile: userProfile ? JSON.parse(decodeURIComponent(userProfile)) : undefined,
         redirect_url: `${baseUrl}/api/social/callback/success`
       }, {
-        headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
+        headers: { 'Authorization': `Bearer ${getApiKey()}` }
       });
 
       return {
@@ -231,7 +231,7 @@ export const ZernioAdapter = {
       // For now, we return a filtered contact list or a mock if search isn't supported.
       const response = await axios.get(`${ZERNIO_API_URL}/contacts/search`, {
         params: { profileId, platform, q: query },
-        headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
+        headers: { 'Authorization': `Bearer ${getApiKey()}` }
       });
       return response.data.contacts || [];
     } catch (e: any) {
@@ -247,7 +247,7 @@ export const ZernioAdapter = {
     try {
       const response = await axios.get(`${ZERNIO_API_URL}/contacts`, {
         params: { profileId, platform },
-        headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
+        headers: { 'Authorization': `Bearer ${getApiKey()}` }
       });
       return response.data.contacts || [];
     } catch (e: any) {
@@ -265,7 +265,7 @@ export const ZernioAdapter = {
       if (!profileId) return [];
       const response = await axios.get(`${ZERNIO_API_URL}/accounts`, {
         params: { profileId },
-        headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
+        headers: { 'Authorization': `Bearer ${getApiKey()}` }
       });
       return response.data.accounts || response.data.data || [];
     } catch (e: any) {
@@ -282,7 +282,7 @@ export const ZernioAdapter = {
       if (!profileId || !accountId) throw new Error('profileId and accountId are required for deletion.');
       const response = await axios.delete(`${ZERNIO_API_URL}/accounts/${accountId}`, {
         params: { profileId },
-        headers: { 'Authorization': `Bearer ${ZERNIO_API_KEY}` }
+        headers: { 'Authorization': `Bearer ${getApiKey()}` }
       });
       return response.data;
     } catch (e: any) {
