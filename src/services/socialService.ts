@@ -240,11 +240,10 @@ export const createConnectSession = async (platform: string, deviceId: string, c
             if (authUrl && typeof authUrl === 'string' && authUrl.startsWith('http')) {
                 return authUrl;
             }
+            throw new Error(`Zernio returned empty auth URL for ${platform}`);
         } catch (zernioError: any) {
-            logger.warn(`⚠️ Zernio connection warning (${zernioError.message}). Attempting direct/fallback connector...`);
-            if (zernioError.message && zernioError.message.includes('LIMIT_REACHED')) {
-                throw zernioError;
-            }
+            logger.error(`❌ Zernio connection error [${platform}]: ${zernioError.message}`);
+            throw zernioError;
         }
     }
 
