@@ -60,7 +60,7 @@ export const ZernioAdapter = {
       });
 
       // 🛡️ Double Check: Ensure Zernio isn't ignoring our redirect_uri
-      return response.data.authUrl;
+      return response.data.authUrl || response.data.url || response.data.redirect_url;
     } catch (error: any) {
       const status = error.response?.status;
       const data = error.response?.data;

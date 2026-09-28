@@ -78,7 +78,7 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
                 {
                     _id: 'social_fallback_1',
                     platform: 'twitter',
-                    author: { id: 'agent_alpha', name: 'Alpha Commander', handle: '@alpha_cmd' },
+                    author: { id: 'agent_alpha', name: 'Alpha Commander' },
                     content: { text: 'Secure channels active across sector 7. All tactical reconnaissance nodes reporting normal operational metrics. 🛰️' },
                     createdAt: new Date().toISOString(),
                     type: 'post',
@@ -87,7 +87,7 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
                 {
                     _id: 'social_fallback_2',
                     platform: 'linkedin',
-                    author: { id: 'strat_exec', name: 'Strategic Oversight', handle: 'Global Operations' },
+                    author: { id: 'strat_exec', name: 'Strategic Oversight' },
                     content: { text: 'Launching decentralized agent synchronization protocols to optimize cross-platform intelligence distribution.' },
                     createdAt: new Date(Date.now() - 3600000).toISOString(),
                     type: 'post',
@@ -96,7 +96,7 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
                 {
                     _id: 'social_fallback_3',
                     platform: 'discord',
-                    author: { id: 'dev_ops', name: 'Core Sentinel', handle: '#sentinel' },
+                    author: { id: 'dev_ops', name: 'Core Sentinel' },
                     content: { text: 'Real-time telemetry and stellar vectors synchronized with local observer coordinates.' },
                     createdAt: new Date(Date.now() - 7200000).toISOString(),
                     type: 'message',
@@ -257,13 +257,7 @@ export const createConnectSession = async (platform: string, deviceId: string, c
         return TwitterOAuth.getAuthUrl(deviceId, callbackUrl);
     }
 
-    // 3. Fallback: Direct Handshake Callback URL if Zernio API key is present
-    if (process.env.ZERNIO_API_KEY) {
-        const fallbackUrl = `${callbackUrl}${callbackUrl.includes('?') ? '&' : '?'}deviceId=${deviceId}&platform=${normPlatform}&tempToken=MOCK_CONNECT_${Date.now()}`;
-        return fallbackUrl;
-    }
-
-    throw new Error(`Social connection provider for ${platform} is not configured on backend.`);
+    throw new Error(`Failed to retrieve valid Zernio auth URL for ${platform}. Check Zernio API key and platform configuration.`);
 };
 
 export const exchangeOAuthCode = async (deviceId: string, platform: string, code: string, callbackUrl: string) => {
