@@ -20,7 +20,7 @@ export const ZernioAdapter = {
     try {
       const safeId = (deviceId || 'device_default').toString();
       const response = await axios.post(`${ZERNIO_API_URL}/profiles`, {
-        name: `User ${safeId.slice(0, 6)}`,
+        name: `User ${safeId.slice(0, 6)}_${Math.random().toString(36).substring(2, 6)}`,
         description: `Mistreal Agent Profile for device ${safeId}`
       }, {
         headers: { 'Authorization': `Bearer ${getApiKey()}` }
@@ -33,6 +33,12 @@ export const ZernioAdapter = {
 
       if (status === 402) {
         throw new Error('ZERNIO_PAYMENT_REQUIRED: Your Zernio account has reached its free profile limit or needs a valid payment method.');
+      }
+
+      // 🛡️ Graceful Recovery: If profile name already exists, reuse existingProfileId from Zernio response
+      if (data?.code === 'profile_name_conflict' && data?.details?.existingProfileId) {
+        console.info(`ℹ️ Zernio profile name conflict resolved. Reusing existing profileId: ${data.details.existingProfileId}`);
+        return data.details.existingProfileId;
       }
 
       console.error('Zernio Profile Error:', data || error.message);
