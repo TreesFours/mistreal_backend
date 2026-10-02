@@ -1,11 +1,13 @@
 import axios from 'axios';
 import logger from '../utils/logger';
+import { GeminiProvider } from './ai/geminiProvider';
+import { OpenRouterProvider } from './ai/openRouterProvider';
+import { OpenAiCompatibleProvider } from './ai/openAiCompatibleProvider';
+import { AnthropicProvider } from './ai/anthropicProvider';
+import { decrypt } from '../utils/secretCrypto';
+import { ProviderChatResponse } from './ai/types';
 
-const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const GOOGLE_AI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
-
-const FAILURE_THRESHOLD = 3;
-const REQUEST_TIMEOUT_MS = 15000;
 
 export interface AiResponse {
     content: string;
@@ -146,7 +148,12 @@ export const getAvailableModels = async (isPro: boolean, freeUserCount: number =
             price: isProModel ? 'PRO' : 'Free',
             quota: share,
             health: Math.floor(Math.random() * 20) + 80, // Dynamic simulation for now
-            features: m.supportedGenerationMethods?.length || 0
+            features: m.supportedGenerationMethods?.length || 0,
+            // Honest capability flags: imageGen/videoGen are false everywhere until
+            // generation is actually wired server-side (separate backlog item).
+            // Gemini's direct-call path already accepts audioData — OpenRouter's
+            // path never does — so voice differs per provider below.
+            capabilities: { text: true, imageGen: false, videoGen: false, voice: true }
         };
     });
 
@@ -169,7 +176,8 @@ export const getAvailableModels = async (isPro: boolean, freeUserCount: number =
                         price: 'Free',
                         quota: `${Math.floor(OPENROUTER_FREE_DAILY_LIMIT / freeUserCount)} req/day`,
                         health: Math.floor(Math.random() * 30) + 70,
-                        features: 3
+                        features: 3,
+                        capabilities: { text: true, imageGen: false, videoGen: false, voice: false }
                     }));
 
                 const premium = response.data.data
@@ -187,7 +195,8 @@ export const getAvailableModels = async (isPro: boolean, freeUserCount: number =
                         price: 'PRO',
                         quota: "High Bandwidth",
                         health: 100,
-                        features: 3
+                        features: 3,
+                        capabilities: { text: true, imageGen: false, videoGen: false, voice: false }
                     }));
 
                 models = [...models, ...freeOpenRouter, ...(isPro ? premium : [])];
@@ -254,10 +263,62 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
 
     Current Date/Time: ${new Date().toUTCString()}.`;
 
-    if (isGoogleModel && geminiKey) {
-        // 🚀 DYNAMIC RESOLUTION: Use the model if specified, otherwise find best fit
-        let targetModel = activeProvider === 'dynamic' ? "" : activeProvider;
+    // 🔑 BYOK: if the user has configured and enabled their own provider, route
+    // entirely through it — no fallback to the app's own Gemini/OpenRouter keys
+    // on failure, since that would be a different trust boundary (billing the
+    // app for a request the user explicitly asked their own key to handle).
+    if (user?.byokEnabled && user?.byokProviderType && user?.byokEncryptedKey) {
+        try {
+            const apiKey = decrypt(user.byokEncryptedKey);
+            const byokHistory = history.map((m: any) => ({ role: m.role, content: m.content }));
+            let result: ProviderChatResponse;
 
+            switch (user.byokProviderType) {
+                case 'openai':
+                    result = await OpenAiCompatibleProvider.chat({
+                        systemInstruction, history: byokHistory, prompt, apiKey,
+                        modelId: user.byokModelName || undefined, imageDatas, audioData
+                    });
+                    break;
+                case 'openai_compatible':
+                    result = await OpenAiCompatibleProvider.chat({
+                        systemInstruction, history: byokHistory, prompt, apiKey,
+                        modelId: user.byokModelName || undefined, baseUrl: user.byokBaseUrl || undefined,
+                        imageDatas, audioData
+                    });
+                    break;
+                case 'anthropic':
+                    result = await AnthropicProvider.chat({
+                        systemInstruction, history: byokHistory, prompt, apiKey,
+                        modelId: user.byokModelName || undefined, imageDatas, audioData
+                    });
+                    break;
+                case 'gemini':
+                    result = await GeminiProvider.chat({
+                        systemInstruction, history: byokHistory, prompt, apiKey,
+                        modelCandidates: [user.byokModelName || 'gemini-1.5-flash'], imageDatas, audioData
+                    });
+                    break;
+                default:
+                    return { content: '', provider: activeProvider, success: false, error: `Unknown BYOK provider type: ${user.byokProviderType}` };
+            }
+
+            return {
+                content: result.content,
+                provider: `byok:${user.byokProviderType}`,
+                success: result.success,
+                error: result.error
+            };
+        } catch (error: any) {
+            logger.error(`❌ BYOK execution error: ${error.message}`);
+            return { content: '', provider: 'byok', success: false, error: error.message };
+        }
+    }
+
+    // --- App-key path (curated models) — behavior preserved exactly ---
+
+    if (isGoogleModel && geminiKey) {
+        let targetModel = activeProvider === 'dynamic' ? "" : activeProvider;
         const rankedCandidates = await getRankedGeminiModels(user?.isPro);
 
         if (!targetModel || targetModel === 'dynamic') {
@@ -269,71 +330,19 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
             if (!modelsToTry.includes(m)) modelsToTry.push(m);
         });
 
-        let lastError = "";
+        const geminiHistory = history.map((m: any) => ({ role: m.role, content: m.content }));
+        const result = await GeminiProvider.chat({
+            systemInstruction, history: geminiHistory, prompt, apiKey: geminiKey,
+            modelCandidates: modelsToTry, imageDatas, audioData
+        });
 
-        for (const targetModel of modelsToTry) {
-            try {
-                // 🛡️ CRITICAL FIX: Ensure no double-prefixing or invalid "google/" strings
-                const cleanModelName = targetModel.replace('models/', '').replace('google/', '').trim();
-
-                logger.info(`🤖 Intelligence Routing: Attempting ${cleanModelName}`);
-
-                const contents = history.map((m: any) => ({
-                    role: m.role === 'assistant' || m.role === 'model' ? 'model' : 'user',
-                    parts: [{ text: m.content }]
-                }));
-
-                const currentParts: any[] = [{ text: prompt }];
-                if (imageDatas) imageDatas.forEach((d: any) => currentParts.push({ inline_data: { mime_type: "image/jpeg", data: d } }));
-                if (audioData) currentParts.push({ inline_data: { mime_type: "audio/mp3", data: audioData } });
-                contents.push({ role: 'user', parts: currentParts });
-
-                const url = `${GOOGLE_AI_BASE_URL}/models/${cleanModelName}:generateContent?key=${geminiKey}`;
-                logger.info(`📡 AI Direct Execution: ${cleanModelName}`);
-
-                const response = await axios.post(url, {
-                    contents,
-                    system_instruction: { parts: [{ text: systemInstruction }] },
-                    tools: [{
-                        google_search_retrieval: {
-                            dynamic_retrieval_config: { mode: "MODE_DYNAMIC", dynamic_threshold: 0.3 }
-                        }
-                    }]
-                }, {
-                    timeout: REQUEST_TIMEOUT_MS,
-                    validateStatus: () => true // Catch all statuses to log full details
-                });
-
-                if (response.status === 200 && response.data?.candidates?.[0]?.content?.parts?.[0]?.text) {
-                    return {
-                        content: response.data.candidates[0].content.parts[0].text,
-                        provider: targetModel,
-                        success: true
-                    };
-                }
-
-                // CRITICAL AUDIT: Detailed error capture for "No Endpoint" debugging
-                const remoteError = response.data?.error?.message || response.statusText;
-                lastError = `[HTTP ${response.status}] ${remoteError}`;
-                logger.error(`❌ Gemini API Failure [${cleanModelName}]: ${lastError}`);
-
-                if (response.status === 404) {
-                    lastError = `ENDPOINT_NOT_FOUND: The model name '${cleanModelName}' might be incorrect for your API key region.`;
-                }
-
-                continue;
-            } catch (error: any) {
-                lastError = error.message;
-                logger.error(`❌ Gemini Network/Axios Error: ${lastError}`);
-                continue;
-            }
+        if (result.success) {
+            return { content: result.content, provider: result.modelUsed, success: true };
         }
 
         // 🚨 ULTIMATE EMERGENCY PIVOT: If all Google candidates fail, try OpenRouter as a bridge.
         if (openRouterKey) {
             logger.error(`🚨 Global Google failure. Pivoting to OpenRouter bridge...`);
-            // Corrected OpenRouter model ID for Gemini 1.5 Flash (Use most stable ID)
-            // Try flash first, if it fails, the OpenRouter block below will catch and report.
             return await getAiResponse(prompt, 'google/gemini-flash-1.5', history, user, imageDatas, audioData);
         }
 
@@ -341,7 +350,7 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
             content: '',
             provider: 'emergency',
             success: false,
-            error: `AI SYSTEMS OFFLINE. Last Internal Error: ${lastError}`
+            error: `AI SYSTEMS OFFLINE. Last Internal Error: ${result.error}`
         };
     }
 
@@ -355,49 +364,14 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
         'meta-llama/llama-3-8b-instruct:free'
     ];
 
-    let orLastError = "";
+    const orHistory = history.map((m: any) => ({ role: m.role, content: m.content }));
+    const orResult = await OpenRouterProvider.chat({
+        systemInstruction, history: orHistory, prompt, apiKey: openRouterKey, modelCandidates: orModels
+    });
 
-    for (const modelId of orModels) {
-        try {
-            const response = await axios.post(OPENROUTER_API_URL, {
-                model: modelId,
-                messages: [
-                    { role: 'system', content: systemInstruction },
-                    ...history.map((m: any) => ({ role: m.role, content: m.content })),
-                    { role: 'user', content: prompt }
-                ]
-            }, {
-                headers: {
-                    'Authorization': `Bearer ${openRouterKey}`,
-                    'HTTP-Referer': 'https://mistreal-assistant.com',
-                    'X-Title': 'Mistreal Assistant'
-                },
-                timeout: REQUEST_TIMEOUT_MS,
-                validateStatus: (status) => status < 500 // Fail on 5xx, but catch 404/429
-            });
-
-            if (response.status === 200 && response.data?.choices?.[0]?.message?.content) {
-                return {
-                    content: response.data.choices[0].message.content,
-                    provider: `openrouter/${modelId}`,
-                    success: true
-                };
-            }
-
-            orLastError = response.data?.error?.message || `HTTP ${response.status}`;
-            logger.warn(`⚠️ OpenRouter Model ${modelId} failed: ${orLastError}`);
-            continue;
-        } catch (error: any) {
-            orLastError = error.message;
-            logger.error(`❌ OpenRouter Connection Error [${modelId}]: ${orLastError}`);
-            continue;
-        }
+    if (orResult.success) {
+        return { content: orResult.content, provider: orResult.modelUsed, success: true };
     }
 
-    return {
-        content: '',
-        provider: activeProvider,
-        success: false,
-        error: `PROVIDER_ERROR: ${orLastError} (Checked ${orModels.length} models)`
-    };
+    return { content: '', provider: activeProvider, success: false, error: orResult.error };
 };

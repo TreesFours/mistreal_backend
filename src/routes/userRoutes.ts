@@ -30,16 +30,38 @@ router.post('/settings', authenticateUser, validate(userSettingsSchema), async (
         const user = await getResolvedUser(req);
         if (!user) return res.status(404).json({ success: false, error: 'User system unavailable' });
 
-        const { userName, aiPersona, autoReplyDelay, guardianEnabled, emergencyContacts } = req.body;
+        const { userName, aiPersona, autoReplyDelay, guardianEnabled, emergencyContacts, aiAutoSendEnabled } = req.body;
 
         if (userName !== undefined) user.userName = userName;
         if (aiPersona !== undefined) user.aiPersona = aiPersona;
         if (autoReplyDelay !== undefined) user.autoReplyDelay = autoReplyDelay;
         if (guardianEnabled !== undefined) user.guardianEnabled = guardianEnabled;
         if (emergencyContacts !== undefined) user.emergencyContacts = emergencyContacts;
+        if (aiAutoSendEnabled !== undefined) user.aiAutoSendEnabled = aiAutoSendEnabled;
 
         await user.save();
         res.json({ success: true, message: 'Settings secured successfully' });
+    } catch (error: any) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ⚙️ Read back current settings (server-confirmed source of truth — e.g. the
+// AI auto-send toggle must not be gated by a client-only flag the user could
+// bypass by reinstalling with a stale local cache).
+router.get('/settings', authenticateUser, async (req: Request, res: Response) => {
+    try {
+        const user = await getResolvedUser(req);
+        if (!user) return res.status(404).json({ success: false, error: 'User system unavailable' });
+
+        res.json({
+            success: true,
+            userName: user.userName,
+            aiPersona: user.aiPersona,
+            autoReplyDelay: user.autoReplyDelay,
+            guardianEnabled: user.guardianEnabled,
+            aiAutoSendEnabled: user.aiAutoSendEnabled
+        });
     } catch (error: any) {
         res.status(500).json({ success: false, error: error.message });
     }

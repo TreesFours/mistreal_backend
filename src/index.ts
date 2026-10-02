@@ -31,6 +31,8 @@ import socialRoutes from './routes/socialRoutes';
 import webhookRoutes from './routes/webhookRoutes';
 import userRoutes from './routes/userRoutes';
 import { validate, chatSchema, socialActionSchema, userSettingsSchema } from './middleware/validationMiddleware';
+import { getOrCreateUserInternal } from './utils/userResolver';
+import aiProviderRoutes from './routes/aiProviderRoutes';
 
 dotenv.config();
 
@@ -41,38 +43,6 @@ const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 15 * 1024 * 1024 } // 15MB tactical limit
 });
-
-// 🛡️ Helper: Get or Create User (Internal usage)
-const getOrCreateUserInternal = async (deviceId: string, firebaseUid?: string) => {
-    if (!DATABASE_URL) return null;
-    try {
-        // 🛡️ Zero-Defect Priority: If firebaseUid is provided, try to find by that first
-        if (firebaseUid) {
-            const userByUid = await User.findOne({ where: { firebaseUid } });
-            if (userByUid) {
-                // If deviceId differs, update it (continuity)
-                if (userByUid.deviceId !== deviceId) {
-                    userByUid.deviceId = deviceId;
-                    await userByUid.save();
-                }
-                return userByUid;
-            }
-        }
-
-        const [user, created] = await User.findOrCreate({
-            where: { deviceId },
-            defaults: { deviceId, firebaseUid, isPro: false, subscriptionTier: 'free' }
-        });
-
-        // Link firebaseUid if it wasn't linked yet
-        if (!created && firebaseUid && !user.firebaseUid) {
-            user.firebaseUid = firebaseUid;
-            await user.save();
-        }
-
-        return user;
-    } catch (e) { return null; }
-};
 
 // 🗄️ Database Connection
 const initDb = async () => {
@@ -107,6 +77,7 @@ app.use(express.json({
 app.use('/api/social', socialRoutes);
 app.use('/api/webhook', webhookRoutes);
 app.use('/api/user', userRoutes); // Combined /api/user/settings and /api/user/platforms
+app.use('/api/ai-provider', aiProviderRoutes);
 
 app.get('/', (req, res) => res.send('🚀 Mistreal Backend Running'));
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date() }));

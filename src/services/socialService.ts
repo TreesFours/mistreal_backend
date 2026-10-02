@@ -11,7 +11,8 @@ export const getAvailablePlatforms = async (isPro: boolean) => {
         name: def.displayName,
         icon: def.icon,
         color: def.color,
-        isProOnly: def.isProOnly
+        isProOnly: def.isProOnly,
+        capabilities: def.capabilities
     }));
 };
 
@@ -97,9 +98,17 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
         const posts = filteredItems.map((it: any) => {
             const def = getPlatformDefinition(it.platform);
 
-            // Extract image from attachments if available
-            const imageUrl = it.content?.attachments?.find((a: any) => a.type === 'image')?.url ||
-                             it.metadata?.attachments?.find((a: any) => a.type === 'image')?.url;
+            // Extract image/video from attachments if available
+            const attachments = it.content?.attachments || it.metadata?.attachments || [];
+            const imageUrl = attachments.find((a: any) => a.type === 'image')?.url || null;
+            const videoUrl = attachments.find((a: any) => a.type === 'video')?.url || null;
+
+            // Resolve the real content kind. Zernio's raw items don't consistently
+            // flag stories/reels, so check both a dedicated `type` and metadata hints
+            // before falling back to a generic "post".
+            const isStory = it.type === 'story' || it.metadata?.is_story === true || it.metadata?.media_product_type === 'STORY';
+            const isReel = !isStory && (it.type === 'reel' || it.metadata?.is_reel === true || it.metadata?.media_product_type === 'REELS' || (videoUrl && it.metadata?.media_type === 'VIDEO'));
+            const resolvedType = isStory ? 'story' : isReel ? 'reel' : (it.type || 'post');
 
             return {
                 id: it._id || it.id,
@@ -107,8 +116,9 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
                 author: it.author?.name || it.author?.handle || 'Social Contact',
                 content: it.content?.text || it.content?.body || '',
                 timestamp: it.createdAt || it.timestamp || new Date().toISOString(),
-                type: it.type || 'post',
-                imageUrl: imageUrl || null,
+                type: resolvedType,
+                imageUrl: imageUrl,
+                videoUrl: videoUrl,
                 sourceUrl: it.source_url || it.url || null,
                 platformIcon: def?.icon || '🔗',
                 platformColor: def?.color || '#888',
@@ -322,7 +332,9 @@ export const getPlatformContacts = async (user: User, platform: string, search?:
         const events = await SocialEvent.findAll({
             where: {
                 deviceId: user.deviceId,
-                platform: platform.toLowerCase()
+                platform: platform.toLowerCase(),
+                // Only DM events define a "contact" — posts/comments must not leak in here.
+                type: 'message'
             },
             order: [['timestamp', 'DESC']],
             limit: 100
@@ -376,7 +388,9 @@ export const getUnreadMessages = async (user: User) => {
         const events = await SocialEvent.findAll({
             where: {
                 deviceId: user.deviceId,
-                isRead: false
+                isRead: false,
+                // Unread posts/comments must not surface in the DM unread badge.
+                type: 'message'
             },
             order: [['timestamp', 'DESC']],
             limit: 20
@@ -402,7 +416,9 @@ export const getSocialHistory = async (user: User, platform: string, targetId: s
         const events = await SocialEvent.findAll({
             where: {
                 deviceId: user.deviceId,
-                platform: platform.toLowerCase()
+                platform: platform.toLowerCase(),
+                // A DM thread must only contain messages, not that contact's unrelated posts/comments.
+                type: 'message'
             },
             order: [['timestamp', 'ASC']],
             limit: 50

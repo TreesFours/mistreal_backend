@@ -43,6 +43,14 @@ export class User extends Model {
     public discordAccessToken!: string | null;
     public telegramAccessToken!: string | null;
     public redditAccessToken!: string | null;
+
+    // 🔑 Bring-your-own-key AI provider (byokEncryptedKey is AES-256-GCM, never plaintext)
+    public byokEnabled!: boolean;
+    public byokProviderType!: string | null; // 'openai' | 'anthropic' | 'gemini' | 'openai_compatible'
+    public byokEncryptedKey!: string | null;
+    public byokBaseUrl!: string | null;
+    public byokModelName!: string | null;
+    public aiAutoSendEnabled!: boolean;
 }
 
 User.init({
@@ -85,7 +93,15 @@ User.init({
     linkedinAccessToken: { type: DataTypes.TEXT, allowNull: true },
     discordAccessToken: { type: DataTypes.TEXT, allowNull: true },
     telegramAccessToken: { type: DataTypes.TEXT, allowNull: true },
-    redditAccessToken: { type: DataTypes.TEXT, allowNull: true }
+    redditAccessToken: { type: DataTypes.TEXT, allowNull: true },
+
+    // 🔑 Bring-your-own-key AI provider
+    byokEnabled: { type: DataTypes.BOOLEAN, defaultValue: false },
+    byokProviderType: { type: DataTypes.STRING, allowNull: true },
+    byokEncryptedKey: { type: DataTypes.TEXT, allowNull: true },
+    byokBaseUrl: { type: DataTypes.STRING, allowNull: true },
+    byokModelName: { type: DataTypes.STRING, allowNull: true },
+    aiAutoSendEnabled: { type: DataTypes.BOOLEAN, defaultValue: false }
 }, {
     sequelize,
     modelName: 'User',

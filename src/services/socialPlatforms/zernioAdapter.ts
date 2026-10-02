@@ -132,7 +132,7 @@ export const ZernioAdapter = {
       if (!account) throw new Error(`${platform} not linked to this profile.`);
 
       // 🛡️ BRANCH: Content vs Actions
-      if (type.toLowerCase() === 'like' || type.toLowerCase() === 'follow') {
+      if (['like', 'follow', 'unfollow'].includes(type.toLowerCase())) {
         const response = await axios.post(`${ZERNIO_API_URL}/actions`, {
           platform,
           accountId: account._id,
@@ -152,6 +152,21 @@ export const ZernioAdapter = {
             content: { text: content }
         }, {
             headers: { 'Authorization': `Bearer ${getApiKey()}` }
+        });
+        return response.data;
+      }
+
+      if (type.toLowerCase() === 'comment') {
+        // TODO: verify this is Zernio's actual comment-create route/payload shape
+        // against their docs/support once credentials are available — unlike
+        // /actions and /messages, this endpoint isn't exercised anywhere yet.
+        const response = await axios.post(`${ZERNIO_API_URL}/comments`, {
+          platform,
+          accountId: account._id,
+          postId: targetId,
+          content: { text: content }
+        }, {
+          headers: { 'Authorization': `Bearer ${getApiKey()}` }
         });
         return response.data;
       }

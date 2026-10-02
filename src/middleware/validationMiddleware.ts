@@ -59,5 +59,26 @@ export const userSettingsSchema = z.object({
         autoReplyDelay: z.number().optional(),
         guardianEnabled: z.boolean().optional(),
         emergencyContacts: z.array(z.any()).optional(),
+        aiAutoSendEnabled: z.boolean().optional(),
+    })
+});
+
+export const byokKeySchema = z.object({
+    body: z.object({
+        deviceId: z.string({ required_error: "deviceId is required" }),
+        firebaseUid: z.string().optional(),
+        providerType: z.enum(['openai', 'anthropic', 'gemini', 'openai_compatible'], {
+            required_error: "providerType is required"
+        }),
+        apiKey: z.string({ required_error: "apiKey is required" }).min(10, "apiKey looks too short to be valid"),
+        baseUrl: z.string().url().optional(),
+        modelName: z.string().optional(),
+    })
+});
+
+export const byokClearSchema = z.object({
+    body: z.object({
+        deviceId: z.string({ required_error: "deviceId is required" }),
+        firebaseUid: z.string().optional(),
     })
 });
