@@ -14,7 +14,13 @@ export interface AiResponse {
     provider: string;
     success: boolean;
     error?: string;
+    generatedImageBase64?: string;
+    generatedImageMimeType?: string;
+    generatedVideoUrl?: string;
 }
+
+export const IMAGE_GEN_MODEL_ID = 'imagen-3.0-generate-002';
+export const VIDEO_GEN_MODEL_ID = 'veo-2.0-generate-001';
 
 // 📦 Professional Multipart File Handlers
 export const extractImageData = (file: Express.Multer.File): string => {
@@ -204,13 +210,126 @@ export const getAvailableModels = async (isPro: boolean, freeUserCount: number =
         } catch (e) {}
     }
 
+    // 🎨 Generation models (Imagen/Veo) — kept Pro-only for now since generation
+    // is materially more expensive per-request than text; revisit once there's
+    // real usage data to size a free-tier quota against.
+    if (process.env.GEMINI_API_KEY) {
+        models = [
+            ...models,
+            {
+                id: IMAGE_GEN_MODEL_ID,
+                name: 'Imagen 3 (Image Generation)',
+                provider: 'google',
+                isProOnly: true,
+                price: 'PRO',
+                quota: 'Premium Unlocked',
+                health: 100,
+                features: 1,
+                capabilities: { text: false, imageGen: true, videoGen: false, voice: false }
+            },
+            {
+                id: VIDEO_GEN_MODEL_ID,
+                name: 'Veo 2 (Video Generation)',
+                provider: 'google',
+                isProOnly: true,
+                price: 'PRO',
+                quota: 'Premium Unlocked',
+                health: 100,
+                features: 1,
+                capabilities: { text: false, imageGen: false, videoGen: true, voice: false }
+            }
+        ];
+    }
+
     return isPro ? models : models.filter((m: any) => !m.isProOnly);
+};
+
+/**
+ * 🖼️ Imagen 3 (synchronous, single REST call).
+ */
+const generateImage = async (prompt: string, apiKey: string): Promise<AiResponse> => {
+    try {
+        const response = await axios.post(
+            `${GOOGLE_AI_BASE_URL}/models/${IMAGE_GEN_MODEL_ID}:predict?key=${apiKey}`,
+            { instances: [{ prompt }], parameters: { sampleCount: 1 } }
+        );
+        const prediction = response.data?.predictions?.[0];
+        if (!prediction?.bytesBase64Encoded) {
+            return { content: '', provider: IMAGE_GEN_MODEL_ID, success: false, error: 'Imagen returned no image data.' };
+        }
+        return {
+            content: '',
+            provider: IMAGE_GEN_MODEL_ID,
+            success: true,
+            generatedImageBase64: prediction.bytesBase64Encoded,
+            generatedImageMimeType: prediction.mimeType || 'image/png'
+        };
+    } catch (error: any) {
+        logger.error('❌ Imagen generation failed:', error.response?.data || error.message);
+        return {
+            content: '', provider: IMAGE_GEN_MODEL_ID, success: false,
+            error: error.response?.data?.error?.message || error.message
+        };
+    }
+};
+
+/**
+ * 🎬 Veo (async long-running operation: kick off, then poll until done).
+ *
+ * UNVERIFIED: Google's Veo-via-Gemini-API is a newer, less-documented surface
+ * than Imagen/chat. The `:predictLongRunning` request shape and the
+ * `response.generateVideoResponse.generatedSamples[].video.uri` result path
+ * below are our best understanding but have NOT been exercised against a real
+ * API key yet — confirm/adjust field names against a live account before
+ * relying on this in production.
+ */
+const generateVideo = async (prompt: string, apiKey: string): Promise<AiResponse> => {
+    try {
+        const startResponse = await axios.post(
+            `${GOOGLE_AI_BASE_URL}/models/${VIDEO_GEN_MODEL_ID}:predictLongRunning?key=${apiKey}`,
+            { instances: [{ prompt }], parameters: { sampleCount: 1 } }
+        );
+        const operationName = startResponse.data?.name;
+        if (!operationName) {
+            return { content: '', provider: VIDEO_GEN_MODEL_ID, success: false, error: 'Veo did not return an operation to poll.' };
+        }
+
+        const maxAttempts = 30; // ~5 minutes at 10s intervals
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            await new Promise((resolve) => setTimeout(resolve, 10000));
+            const pollResponse = await axios.get(`https://generativelanguage.googleapis.com/v1beta/${operationName}?key=${apiKey}`);
+            if (pollResponse.data?.done) {
+                const videoUri = pollResponse.data?.response?.generateVideoResponse?.generatedSamples?.[0]?.video?.uri;
+                if (videoUri) {
+                    return { content: '', provider: VIDEO_GEN_MODEL_ID, success: true, generatedVideoUrl: `${videoUri}${videoUri.includes('?') ? '&' : '?'}key=${apiKey}` };
+                }
+                return { content: '', provider: VIDEO_GEN_MODEL_ID, success: false, error: pollResponse.data?.error?.message || 'Veo finished with no video URI.' };
+            }
+        }
+        return { content: '', provider: VIDEO_GEN_MODEL_ID, success: false, error: 'Veo generation timed out.' };
+    } catch (error: any) {
+        logger.error('❌ Veo generation failed:', error.response?.data || error.message);
+        return {
+            content: '', provider: VIDEO_GEN_MODEL_ID, success: false,
+            error: error.response?.data?.error?.message || error.message
+        };
+    }
 };
 
 /**
  * 🛡️ UNIVERSAL AI EXECUTION (With Smart Failover)
  */
 export const getAiResponse = async (prompt: string, provider: string, history: any[], user?: any, imageDatas?: string[], audioData?: string): Promise<AiResponse> => {
+    const geminiKeyForGeneration = process.env.GEMINI_API_KEY;
+    if (provider === IMAGE_GEN_MODEL_ID) {
+        if (!geminiKeyForGeneration) return { content: '', provider, success: false, error: 'Image generation is not configured.' };
+        return generateImage(prompt, geminiKeyForGeneration);
+    }
+    if (provider === VIDEO_GEN_MODEL_ID) {
+        if (!geminiKeyForGeneration) return { content: '', provider, success: false, error: 'Video generation is not configured.' };
+        return generateVideo(prompt, geminiKeyForGeneration);
+    }
+
     const geminiKey = process.env.GEMINI_API_KEY;
     const openRouterKey = process.env.OPENROUTER_API_KEY;
 
