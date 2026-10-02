@@ -327,6 +327,28 @@ export const sendSocialAction = async (user: User, action: { platform: string, t
     return await ZernioAdapter.sendAction(user.zernioProfileId, action.platform, action.content, action.type, action.targetId);
 };
 
+/**
+ * 👻 Per-contact Ghost Responder override. Auto-reply is gated by BOTH the
+ * global `user.guardianEnabled` master switch AND this per-contact flag, so
+ * turning the master switch on never silently starts auto-replying to every
+ * contact — each DM minichat opts in individually.
+ */
+const contactAutoReplyKey = (platform: string, contactId: string) => `${platform.toLowerCase()}:${contactId}`;
+
+export const isContactAutoReplyEnabled = (user: User, platform: string, contactId: string): boolean => {
+    const map = user.preferences?.autoReplyContacts || {};
+    return map[contactAutoReplyKey(platform, contactId)] === true;
+};
+
+export const setContactAutoReply = async (user: User, platform: string, contactId: string, enabled: boolean) => {
+    const map = { ...(user.preferences?.autoReplyContacts || {}) };
+    const key = contactAutoReplyKey(platform, contactId);
+    if (enabled) map[key] = true; else delete map[key];
+    user.set('preferences', { ...user.preferences, autoReplyContacts: map });
+    user.changed('preferences', true);
+    await user.save();
+};
+
 export const getPlatformContacts = async (user: User, platform: string, search?: string) => {
     try {
         const events = await SocialEvent.findAll({
@@ -351,7 +373,8 @@ export const getPlatformContacts = async (user: User, platform: string, search?:
                     isOnline: true,
                     lastSeen: 'Recently',
                     statusMessage: e.content?.slice(0, 30) || 'Active',
-                    avatar: null
+                    avatar: null,
+                    autoReplyEnabled: isContactAutoReplyEnabled(user, e.platform, e.senderId)
                 });
             }
         }
@@ -372,7 +395,8 @@ export const getPlatformContacts = async (user: User, platform: string, search?:
                 isOnline: false,
                 lastSeen: 'Unknown',
                 statusMessage: 'Zernio Contact',
-                avatar: c.avatar || null
+                avatar: c.avatar || null,
+                autoReplyEnabled: isContactAutoReplyEnabled(user, platform, c.id || c._id)
             }));
         }
 

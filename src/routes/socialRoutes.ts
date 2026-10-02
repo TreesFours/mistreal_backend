@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { Op } from 'sequelize';
 import { UnifiedSocialService } from '../services/socialPlatforms/unified';
-import { createConnectSession, getAvailablePlatforms, sendSocialAction, exchangeOAuthCode, disconnectPlatform, getPlatformContacts, getUnreadMessages, getSocialHistory, reconcileUserPlatforms, normalizePlatformId, isPlatformMatching } from '../services/socialService';
+import { createConnectSession, getAvailablePlatforms, sendSocialAction, exchangeOAuthCode, disconnectPlatform, getPlatformContacts, getUnreadMessages, getSocialHistory, reconcileUserPlatforms, normalizePlatformId, isPlatformMatching, setContactAutoReply } from '../services/socialService';
 import { ZernioAdapter } from '../services/socialPlatforms/zernioAdapter';
 import { User, SocialEvent } from '../models/userModel';
 import { WebhookService } from '../services/webhookService';
@@ -192,6 +192,29 @@ router.get('/contacts', optionalAuthenticateUser, async (req: Request, res: Resp
     } catch (e: any) {
         logger.error(`❌ GET /contacts error: ${e.message}`);
         res.status(200).json({ success: false, contacts: [] });
+    }
+});
+
+/**
+ * 3b. PER-CONTACT GHOST RESPONDER TOGGLE
+ * Gates auto-reply for one specific DM thread/minichat. Requires the global
+ * guardianEnabled master switch to ALSO be on before it ever actually fires.
+ */
+router.post('/contacts/auto-reply', optionalAuthenticateUser, async (req: Request, res: Response) => {
+    try {
+        const user = await getResolvedUser(req);
+        if (!user) return res.status(200).json({ success: false, error: 'User resolve failed' });
+
+        const { platform, contactId, enabled } = req.body;
+        if (!platform || !contactId || typeof enabled !== 'boolean') {
+            return res.status(200).json({ success: false, error: 'platform, contactId and enabled are required' });
+        }
+
+        await setContactAutoReply(user, platform, contactId, enabled);
+        res.json({ success: true });
+    } catch (e: any) {
+        logger.error(`❌ POST /contacts/auto-reply error: ${e.message}`);
+        res.status(200).json({ success: false, error: e.message });
     }
 });
 

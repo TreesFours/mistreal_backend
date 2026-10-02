@@ -6,7 +6,7 @@ import * as admin from 'firebase-admin';
 import logger from '../utils/logger';
 import { User, SocialEvent, DelayedAction, sequelize } from '../models/userModel';
 import { getAiResponse } from './aiService';
-import { normalizePlatformId, isPlatformMatching } from './socialService';
+import { normalizePlatformId, isPlatformMatching, isContactAutoReplyEnabled } from './socialService';
 
 export class WebhookService {
 // ... (rest of the imports/class structure)
@@ -223,8 +223,12 @@ export class WebhookService {
 
         logger.info(`💬 [${platform}] Message queued for Shadow AI analysis.`);
 
-        // 🛡️ GHOST RESPONDER: Auto-Reply Logic
-        if (user.guardianEnabled) {
+        // 🛡️ GHOST RESPONDER: Auto-Reply Logic — requires BOTH the global master
+        // switch AND this specific contact's minichat to have auto-reply enabled,
+        // so turning the master switch on never silently starts auto-replying to
+        // every contact at once.
+        const incomingSenderId = data.sender?.id || data.author?.id;
+        if (user.guardianEnabled && incomingSenderId && isContactAutoReplyEnabled(user, platform, incomingSenderId)) {
             const incomingContent = data.content?.text || data.text || "";
             const prompt = `AUTO_REPLY_MODE: A contact named ${sender} just sent you this on ${platform}: "${incomingContent}".
             Reply as ${user.aiPersona || 'Shadow'}. Be concise. Keep it tactical.`;
