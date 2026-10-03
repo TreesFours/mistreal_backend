@@ -26,6 +26,7 @@ import { User, DelayedAction, IntelligenceBuffer } from './models/userModel';
 import { PinnedIntel } from './models/PinnedIntel';
 import { SocialToken } from './models/SocialToken';
 import { EmailMessage } from './models/EmailMessage'; // imported for Sequelize registration — table is created by sequelize.sync below
+import { AiProviderConfig } from './models/AiProviderConfig'; // same — registration only
 import { sequelize } from './db';
 import { verifyPurchase } from './services/googlePlayService';
 import socialRoutes from './routes/socialRoutes';

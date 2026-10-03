@@ -61,6 +61,13 @@ export class User extends Model {
     public byokVideoEncryptedKey!: string | null;
     public byokVideoBaseUrl!: string | null;
     public byokVideoModelName!: string | null;
+
+    // 🎨 Which saved AiProviderConfig (if any) handles image/video GENERATION —
+    // null means "Our Recommended" (Imagen/Veo). Separate from the byokVideo*
+    // fields above, which are specifically for EDITING an existing video, not
+    // generating a new one from scratch.
+    public activeImageGenConfigId!: number | null;
+    public activeVideoGenConfigId!: number | null;
 }
 
 User.init({
@@ -118,7 +125,10 @@ User.init({
     byokVideoProviderType: { type: DataTypes.STRING, allowNull: true },
     byokVideoEncryptedKey: { type: DataTypes.TEXT, allowNull: true },
     byokVideoBaseUrl: { type: DataTypes.STRING, allowNull: true },
-    byokVideoModelName: { type: DataTypes.STRING, allowNull: true }
+    byokVideoModelName: { type: DataTypes.STRING, allowNull: true },
+
+    activeImageGenConfigId: { type: DataTypes.INTEGER, allowNull: true },
+    activeVideoGenConfigId: { type: DataTypes.INTEGER, allowNull: true }
 }, {
     sequelize,
     modelName: 'User',

@@ -3,8 +3,10 @@ import logger from '../../utils/logger';
 
 export interface VideoEditRequest {
     prompt: string;
-    videoBase64: string;
-    mimeType: string;
+    // Omitted (undefined) for a pure-generation call reusing this same adapter
+    // (no source video to edit) — see getAiResponse's VIDEO_GEN_MODEL_ID branch.
+    videoBase64?: string;
+    mimeType?: string;
     apiKey: string;
     baseUrl?: string;
     modelName?: string;
@@ -35,14 +37,14 @@ export const VideoEditProvider = {
             return { success: false, error: 'No video provider endpoint configured.' };
         }
         try {
+            const body: any = { prompt: req.prompt, model: req.modelName };
+            if (req.videoBase64) {
+                body.video = req.videoBase64;
+                body.mimeType = req.mimeType;
+            }
             const response = await axios.post(
                 req.baseUrl,
-                {
-                    prompt: req.prompt,
-                    video: req.videoBase64,
-                    mimeType: req.mimeType,
-                    model: req.modelName
-                },
+                body,
                 {
                     headers: { Authorization: `Bearer ${req.apiKey}`, 'Content-Type': 'application/json' },
                     timeout: 120000

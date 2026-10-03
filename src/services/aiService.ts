@@ -7,6 +7,8 @@ import { AnthropicProvider } from './ai/anthropicProvider';
 import { decrypt } from '../utils/secretCrypto';
 import { ProviderChatResponse } from './ai/types';
 import { VideoEditProvider } from './ai/videoEditProvider';
+import { ImageGenProvider } from './ai/imageGenProvider';
+import { AiProviderConfig } from '../models/AiProviderConfig';
 import { storeMediaBase64, buildMediaUrl } from '../utils/mediaStore';
 
 const GOOGLE_AI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
@@ -18,6 +20,7 @@ export interface AiResponse {
     error?: string;
     generatedImageBase64?: string;
     generatedImageMimeType?: string;
+    generatedImageUrl?: string;
     generatedVideoUrl?: string;
 }
 
@@ -423,10 +426,43 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
         return { content: '', provider: `byok-video:${user.byokVideoProviderType}`, success: true, generatedVideoUrl: videoUrl };
     }
     if (provider === IMAGE_GEN_MODEL_ID) {
+        // If the user has a saved+active image-gen provider, use theirs instead
+        // of "Our Recommended" (Imagen) — same capability-routing idea as
+        // video-edit BYOK, but with a user-picked choice from a saved list
+        // rather than a single on/off slot.
+        if (user?.activeImageGenConfigId) {
+            const config = await AiProviderConfig.findOne({ where: { id: user.activeImageGenConfigId, deviceId: user.deviceId } });
+            if (config) {
+                const apiKey = decrypt(config.encryptedKey);
+                const result = await ImageGenProvider.generate({ prompt, apiKey, baseUrl: config.baseUrl ?? undefined, modelName: config.modelName ?? undefined });
+                if (!result.success) return { content: '', provider: `custom-image:${config.label}`, success: false, error: result.error };
+                if (result.imageBase64) {
+                    return { content: '', provider: `custom-image:${config.label}`, success: true, generatedImageBase64: result.imageBase64, generatedImageMimeType: 'image/png' };
+                }
+                // Provider gave a URL instead of base64 — pass it through directly
+                // (same as video generation's generatedVideoUrl) rather than an
+                // unnecessary re-fetch-and-re-encode round trip server-side.
+                return { content: '', provider: `custom-image:${config.label}`, success: true, generatedImageUrl: result.imageUrl };
+            }
+        }
         if (!geminiKeyForGeneration) return { content: '', provider, success: false, error: 'Image generation is not configured.' };
         return generateImage(prompt, geminiKeyForGeneration);
     }
     if (provider === VIDEO_GEN_MODEL_ID) {
+        if (user?.activeVideoGenConfigId) {
+            const config = await AiProviderConfig.findOne({ where: { id: user.activeVideoGenConfigId, deviceId: user.deviceId } });
+            if (config) {
+                const apiKey = decrypt(config.encryptedKey);
+                // Video gen providers vary even more than image ones — reusing the
+                // video-edit adapter's generic shape here since both ultimately
+                // need {prompt[, video]} in and a video out; a pure-generation call
+                // just omits the source video.
+                const result = await VideoEditProvider.edit({ prompt, apiKey, baseUrl: config.baseUrl ?? undefined, modelName: config.modelName ?? undefined });
+                if (!result.success) return { content: '', provider: `custom-video:${config.label}`, success: false, error: result.error };
+                const videoUrl = result.videoUrl || buildMediaUrl(storeMediaBase64(result.videoBase64!, 'video/mp4'));
+                return { content: '', provider: `custom-video:${config.label}`, success: true, generatedVideoUrl: videoUrl };
+            }
+        }
         if (!geminiKeyForGeneration) return { content: '', provider, success: false, error: 'Video generation is not configured.' };
         return generateVideo(prompt, geminiKeyForGeneration);
     }

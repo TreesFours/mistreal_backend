@@ -100,3 +100,27 @@ export const byokVideoKeySchema = z.object({
         modelName: z.string().optional(),
     })
 });
+
+// Saved image/video GENERATION provider configs — a user can add several and
+// switch which is active, unlike the single-slot BYOK schemas above.
+export const mediaProviderConfigSchema = z.object({
+    body: z.object({
+        deviceId: z.string({ required_error: "deviceId is required" }),
+        firebaseUid: z.string().optional(),
+        capability: z.enum(['image_gen', 'video_gen'], { required_error: "capability is required" }),
+        label: z.string({ required_error: "label is required" }).min(1).max(60),
+        providerType: z.string({ required_error: "providerType is required" }),
+        apiKey: z.string({ required_error: "apiKey is required" }).min(10, "apiKey looks too short to be valid"),
+        baseUrl: z.string().url({ message: "baseUrl must be a valid URL" }),
+        modelName: z.string().optional(),
+    })
+});
+
+export const mediaProviderActivateSchema = z.object({
+    body: z.object({
+        deviceId: z.string({ required_error: "deviceId is required" }),
+        firebaseUid: z.string().optional(),
+        capability: z.enum(['image_gen', 'video_gen'], { required_error: "capability is required" }),
+        configId: z.number().nullable().optional(), // null/omitted = "Our Recommended"
+    })
+});
