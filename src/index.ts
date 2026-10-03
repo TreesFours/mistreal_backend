@@ -25,6 +25,7 @@ import { getNearbyPlaces } from './services/discoveryService';
 import { User, DelayedAction, IntelligenceBuffer } from './models/userModel';
 import { PinnedIntel } from './models/PinnedIntel';
 import { SocialToken } from './models/SocialToken';
+import { EmailMessage } from './models/EmailMessage'; // imported for Sequelize registration — table is created by sequelize.sync below
 import { sequelize } from './db';
 import { verifyPurchase } from './services/googlePlayService';
 import socialRoutes from './routes/socialRoutes';
@@ -34,6 +35,7 @@ import { validate, chatSchema, socialActionSchema, userSettingsSchema } from './
 import { getOrCreateUserInternal } from './utils/userResolver';
 import aiProviderRoutes from './routes/aiProviderRoutes';
 import emergencyRoutes from './routes/emergencyRoutes';
+import emailRoutes from './routes/emailRoutes';
 
 dotenv.config();
 
@@ -80,6 +82,7 @@ app.use('/api/webhook', webhookRoutes);
 app.use('/api/user', userRoutes); // Combined /api/user/settings and /api/user/platforms
 app.use('/api/ai-provider', aiProviderRoutes);
 app.use('/api/emergency', emergencyRoutes);
+app.use('/api/email', emailRoutes);
 
 app.get('/', (req, res) => res.send('🚀 Mistreal Backend Running'));
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date() }));

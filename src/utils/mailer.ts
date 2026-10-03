@@ -8,6 +8,46 @@ const getTransporter = () => {
 };
 
 /**
+ * ✉️ User-composed email, sent from the app's own transport (not the user's
+ * personal address — there's no OAuth/inbox sync here, see emailRoutes.ts).
+ * Reply-To is set to the sending user's own email if we have one on file, so
+ * a reply from the recipient reaches them directly rather than the app's
+ * shared sender account.
+ */
+export const sendUserComposedEmail = async (
+    toEmail: string,
+    subject: string,
+    body: string,
+    senderName: string,
+    replyToEmail?: string | null
+): Promise<boolean> => {
+    const transporter = getTransporter();
+    const user = process.env.GMAIL_USER;
+    if (!transporter || !user) {
+        console.warn('⚠️ GMAIL_USER or GMAIL_APP_PASS not set. Email send skipped.');
+        return false;
+    }
+
+    const mailOptions = {
+        from: `"${senderName} (via Mistreal)" <${user}>`,
+        replyTo: replyToEmail || undefined,
+        to: toEmail,
+        subject,
+        text: body,
+        html: `<div style="font-family: sans-serif; white-space: pre-wrap;">${body}</div>`
+    };
+
+    try {
+        await transporter.sendMail(mailOptions);
+        console.log(`✅ User-composed email sent to ${toEmail}`);
+        return true;
+    } catch (error: any) {
+        console.error(`❌ Error sending user-composed email to ${toEmail}:`, error.message);
+        return false;
+    }
+};
+
+/**
  * 🆘 Emergency alert email to a saved emergency contact. Separate from the
  * milestone email's fire-and-forget pattern — callers (emergencyRoutes) need
  * the real success/failure per-contact to report back how many were notified.
