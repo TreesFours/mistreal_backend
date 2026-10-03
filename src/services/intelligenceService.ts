@@ -23,12 +23,13 @@ export class IntelligenceService {
             const deviceId = user?.deviceId;
 
             // 2. Fetch All Intelligence Buffers
-            const [newsBuffer, novelBuffer, wikiBuffer, journalBuffer, astroBuffer] = await Promise.all([
+            const [newsBuffer, novelBuffer, wikiBuffer, journalBuffer, astroBuffer, sportsBuffer] = await Promise.all([
                 IntelligenceBuffer.findOne({ where: { category: 'news' } }),
                 IntelligenceBuffer.findOne({ where: { category: 'novels' } }),
                 IntelligenceBuffer.findOne({ where: { category: 'wiki' } }),
                 IntelligenceBuffer.findOne({ where: { category: 'journals' } }),
-                IntelligenceBuffer.findOne({ where: { category: 'astro' } })
+                IntelligenceBuffer.findOne({ where: { category: 'astro' } }),
+                IntelligenceBuffer.findOne({ where: { category: 'sports' } })
             ]);
 
             // 3. Fetch Social Events (only if deviceId is known)
@@ -61,15 +62,17 @@ export class IntelligenceService {
             const journals = (journalBuffer?.items || []).filter((i: any) => !pinnedTitles.includes(i.title)).slice(0, 3);
             const astro = (astroBuffer?.items || []).filter((i: any) => !pinnedTitles.includes(i.title)).slice(0, limit);
             const socials = socialItems.filter((i: any) => !pinnedTitles.includes(i.title)).slice(0, limit);
+            const sports = (sportsBuffer?.items || []).filter((i: any) => !pinnedTitles.includes(i.title)).slice(0, 10);
 
             // 6. Interleave Logic (The Rhythm)
             const interleaved: any[] = [];
 
-            // Add Novel, Wiki, Journal at the very top (Horizontal sections in UI)
+            // Add Novel, Wiki, Journal, Sports at the very top (Horizontal sections in UI)
             const horizontalIntel = [
                 ...novels.map((n: any) => ({ ...n, type: 'novel' })),
                 ...wikis.map((w: any) => ({ ...w, type: 'wiki' })),
-                ...journals.map((j: any) => ({ ...j, type: 'journal' }))
+                ...journals.map((j: any) => ({ ...j, type: 'journal' })),
+                ...sports.map((s: any) => ({ ...s, type: 'sports' }))
             ];
 
             const maxLength = Math.max(news.length, astro.length, socials.length);
@@ -130,6 +133,25 @@ export class IntelligenceService {
     }
 
     /**
+     * Wholesale-replaces a buffer's items (vs. updateBuffer's append-and-dedupe-by-
+     * title) — for categories like sports where the SAME title needs its content
+     * (the score) refreshed each cycle, not treated as already-seen and skipped.
+     */
+    private static async replaceBuffer(category: string, newItems: any[]) {
+        try {
+            const [buffer] = await IntelligenceBuffer.findOrCreate({
+                where: { category },
+                defaults: { category, items: [] }
+            });
+            buffer.items = newItems.slice(0, 30);
+            buffer.lastUpdated = new Date();
+            await buffer.save();
+        } catch (e: any) {
+            logger.error(`❌ Buffer Replace Error (${category}): ${e.message}`);
+        }
+    }
+
+    /**
      * GLOBAL ROLLING ENGINE
      * Triggered by cron or background worker.
      */
@@ -141,8 +163,71 @@ export class IntelligenceService {
             this.refreshAstro(),
             this.refreshLiterature(),
             this.refreshWiki(),
-            this.refreshJournals()
+            this.refreshJournals(),
+            this.refreshSports()
         ]);
+    }
+
+    /**
+     * 🏆 LIVE-ISH SPORTS SCORES — free tier, no API key required (uses
+     * TheSportsDB's public test key). Scheduled separately from the hourly
+     * refreshGlobalIntel cadence since scores go stale much faster than news.
+     *
+     * HONEST LIMITATION: TheSportsDB's free tier serves fixtures/results for
+     * the day, not a true sub-minute live in-play feed — that requires their
+     * paid Patreon tier (or a different provider like API-Football). This is
+     * "refreshed every few minutes," not "updates mid-play." If genuinely
+     * live in-play scores matter, that's a provider upgrade decision, not a
+     * code change.
+     */
+    static async refreshSports() {
+        try {
+            const apiKey = process.env.SPORTSDB_API_KEY || '3'; // '3' = TheSportsDB's public test key
+            const today = new Date().toISOString().split('T')[0];
+            const sports = ['Soccer', 'Basketball', 'American_Football', 'Baseball', 'Ice_Hockey'];
+
+            const results = await Promise.allSettled(
+                sports.map(sport =>
+                    axios.get(`https://www.thesportsdb.com/api/v1/json/${apiKey}/eventsday.php`, {
+                        params: { d: today, s: sport },
+                        timeout: 8000
+                    })
+                )
+            );
+
+            const allEvents: any[] = [];
+            results.forEach((res, index) => {
+                if (res.status === 'fulfilled' && res.value.data?.events) {
+                    allEvents.push(...res.value.data.events.map((e: any) => ({ ...e, _sport: sports[index].replace('_', ' ') })));
+                } else if (res.status === 'rejected') {
+                    logger.warn(`⚠️ Sports fetch warning [${sports[index]}]: ${(res.reason as any)?.message}`);
+                }
+            });
+
+            if (allEvents.length === 0) return;
+
+            const items = allEvents.slice(0, 30).map((e: any) => {
+                const hasScore = e.intHomeScore !== null && e.intHomeScore !== undefined && e.intAwayScore !== null && e.intAwayScore !== undefined;
+                const scoreLine = hasScore ? `${e.intHomeScore} - ${e.intAwayScore}` : (e.strTime ? `Kickoff ${e.strTime}` : 'Scheduled');
+                return {
+                    title: `[${e._sport}] ${e.strHomeTeam} vs ${e.strAwayTeam}`,
+                    description: `${scoreLine} · ${e.strLeague || ''} · ${e.strStatus || 'Scheduled'}`,
+                    url: e.strVideo || `https://www.thesportsdb.com/event/${e.idEvent}`,
+                    source: 'TheSportsDB',
+                    category: e._sport,
+                    timestamp: `${e.dateEvent}T${(e.strTime || '00:00:00')}`
+                };
+            });
+
+            // Sports needs REPLACE semantics, not updateBuffer's append-and-dedupe-by-
+            // title — the whole point is the same match's score changing over time,
+            // and a title-based dedupe would treat a re-fetched fixture as a
+            // duplicate and silently drop the updated score.
+            await this.replaceBuffer('sports', items);
+            logger.info(`🏆 [Sports] Buffer updated: ${items.length} fixtures across ${sports.length} sports`);
+        } catch (e: any) {
+            logger.warn(`⚠️ Sports refresh warning: ${e.message}`);
+        }
     }
 
     private static async refreshNews() {

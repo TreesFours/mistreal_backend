@@ -350,6 +350,16 @@ setInterval(async () => {
     }
 }, 30 * 60 * 1000); // Every 30 mins
 
+// Sports scores go stale much faster than news/wiki/etc, so this runs on its
+// own tighter cadence instead of waiting for the hourly global intel refresh.
+setInterval(async () => {
+    try {
+        await IntelligenceService.refreshSports();
+    } catch (e) {
+        console.error('❌ Sports Worker Error:', e);
+    }
+}, 10 * 60 * 1000); // Every 10 mins
+
 // ⏳ Background Worker: Delayed Social Actions
 setInterval(async () => {
     if (!DATABASE_URL) return;
