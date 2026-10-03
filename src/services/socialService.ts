@@ -20,6 +20,7 @@ export const getAvailablePlatforms = async (isPro: boolean) => {
  * 🔄 Refined Zernio Sync logic
  */
 export const getSocialSummary = async (user: User, isPro: boolean = false) => {
+    const syncWarnings: string[] = [];
     try {
         // 💾 PERSISTENCE FIRST: Fetch from our DB
         const events = await SocialEvent.findAll({
@@ -38,9 +39,16 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
             type: e.type
         }));
 
-        // 🚰 HYDRATION: If DB is empty, do a one-time sync from Zernio
-        if (items.length === 0 && user.zernioProfileId) {
-            console.info(`🚰 [SYNC] DB empty. Hydrating from Zernio Inbox & Feed for Profile: ${user.zernioProfileId}`);
+        // 🚰 HYDRATION: per-platform, not "DB has ANY row at all". The old check
+        // (`items.length === 0`) meant that once a single event existed for this
+        // device — from any platform — newly-connected platforms would never get
+        // their first hydration, since the global count was already non-zero.
+        const connectedPlatforms = (user.connectedPlatforms || []).map((p: string) => normalizePlatformId(p));
+        const platformsWithData = new Set(items.map((i: any) => normalizePlatformId(i.platform)));
+        const unhydrated = connectedPlatforms.filter((p: string) => !platformsWithData.has(p));
+
+        if (unhydrated.length > 0 && user.zernioProfileId) {
+            console.info(`🚰 [SYNC] Hydrating ${unhydrated.join(', ')} from Zernio for Profile: ${user.zernioProfileId}`);
             try {
                 // Fetch both DMs (Inbox) AND Social Posts (Feed)
                 const [inboxItems, feedItems] = await Promise.all([
@@ -48,8 +56,13 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
                     ZernioAdapter.fetchFeed(user.zernioProfileId)
                 ]);
 
-                const allRemoteItems = [...inboxItems, ...feedItems];
-                console.info(`📥 [SYNC] Zernio returned ${inboxItems.length} Inbox items and ${feedItems.length} Feed items.`);
+                const allRemoteItems = [...inboxItems, ...feedItems]
+                    .filter((it: any) => unhydrated.includes(normalizePlatformId(it.platform)));
+                console.info(`📥 [SYNC] Zernio returned ${inboxItems.length} Inbox items and ${feedItems.length} Feed items (${allRemoteItems.length} for newly-connected platforms).`);
+
+                if (inboxItems.length === 0 && feedItems.length === 0) {
+                    syncWarnings.push(`Zernio returned zero items for profile ${user.zernioProfileId} — either the connected account(s) have no content yet, or Zernio isn't returning data for ${unhydrated.join(', ')} (some platforms, e.g. LinkedIn, restrict third-party read access by policy).`);
+                }
 
                 for (const it of allRemoteItems) {
                     await SocialEvent.findOrCreate({
@@ -67,10 +80,13 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
                         }
                     });
                 }
-                items = allRemoteItems;
+                items = [...items, ...allRemoteItems];
             } catch (fetchError: any) {
                 console.error(`❌ [SYNC] Zernio Fetch Failed: ${fetchError.message}`);
+                syncWarnings.push(`Zernio sync failed for ${unhydrated.join(', ')}: ${fetchError.response?.data?.error || fetchError.message}`);
             }
+        } else if (unhydrated.length > 0 && !user.zernioProfileId) {
+            syncWarnings.push(`${unhydrated.join(', ')} connected but no Zernio profile is linked — sync can't run. Try reconnecting.`);
         }
 
         const filteredItems = isPro ? items : items.filter((i: any) =>
@@ -133,7 +149,8 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
             summary: items.length > 0 ? `Unified Intelligence: ${items.length} new signals.` : 'Your intelligence feeds are silent.',
             platformUpdates,
             posts,
-            rawContent: posts.map((p: any) => `[${p.platform}] ${p.author}: ${p.content}`).join('\n')
+            rawContent: posts.map((p: any) => `[${p.platform}] ${p.author}: ${p.content}`).join('\n'),
+            syncWarnings
         };
     } catch (error: any) {
         return { summary: "SYNC_ERROR", platformUpdates: [], posts: [], rawContent: "" };
