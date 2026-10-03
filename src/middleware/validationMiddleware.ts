@@ -84,3 +84,19 @@ export const byokClearSchema = z.object({
         firebaseUid: z.string().optional(),
     })
 });
+
+// Separate from byokKeySchema above — video editing is its own BYOK slot
+// (see userModel.ts byokVideo* fields), not an extra providerType value on
+// the text/chat one, since a user might run both at once.
+export const byokVideoKeySchema = z.object({
+    body: z.object({
+        deviceId: z.string({ required_error: "deviceId is required" }),
+        firebaseUid: z.string().optional(),
+        providerType: z.enum(['runway', 'custom'], {
+            required_error: "providerType is required"
+        }),
+        apiKey: z.string({ required_error: "apiKey is required" }).min(10, "apiKey looks too short to be valid"),
+        baseUrl: z.string().url().optional(),
+        modelName: z.string().optional(),
+    })
+});

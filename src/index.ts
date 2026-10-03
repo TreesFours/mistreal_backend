@@ -15,7 +15,7 @@ import morgan from 'morgan';
 import multer from 'multer';
 import dotenv from 'dotenv';
 import { Op } from 'sequelize';
-import { getAiResponse, getAvailableModels, extractImageData, extractAudioData } from './services/aiService';
+import { getAiResponse, getAvailableModels, extractImageData, extractAudioData, extractVideoData } from './services/aiService';
 import { getSocialSummary, createConnectSession, sendSocialAction } from './services/socialService';
 import { createSubscriptionSession, handleWebhook } from './services/stripeService';
 import { getWeatherData } from './services/weatherService';
@@ -99,9 +99,9 @@ app.get('/media/:id', (req, res) => {
 });
 
 // 🧠 AI Chat
-app.post('/api/chat', upload.fields([{ name: 'images', maxCount: 5 }, { name: 'audio', maxCount: 1 }]), validate(chatSchema), async (req, res) => {
+app.post('/api/chat', upload.fields([{ name: 'images', maxCount: 5 }, { name: 'audio', maxCount: 1 }, { name: 'video', maxCount: 1 }]), validate(chatSchema), async (req, res) => {
     let { prompt, provider, history, deviceId, firebaseUid, contextMetadata } = req.body;
-    const files = req.files as { images?: Express.Multer.File[], audio?: Express.Multer.File[] };
+    const files = req.files as { images?: Express.Multer.File[], audio?: Express.Multer.File[], video?: Express.Multer.File[] };
 
     if (typeof history === 'string') {
         try { history = JSON.parse(history); } catch (e) { history = []; }
@@ -115,13 +115,14 @@ app.post('/api/chat', upload.fields([{ name: 'images', maxCount: 5 }, { name: 'a
 
     const imageDatas = files?.images?.map(extractImageData) || [];
     const audioData = files?.audio?.[0] ? extractAudioData(files.audio[0]) : undefined;
+    const videoData = files?.video?.[0] ? extractVideoData(files.video[0]) : undefined;
 
     let enhancedPrompt = prompt;
     if (contextMetadata) {
         enhancedPrompt = `[CONTEXT: ${contextMetadata}]\n\nUser Question: ${prompt}`;
     }
 
-    const response = await getAiResponse(enhancedPrompt, provider || 'gemini-1.5-flash', history || [], user, imageDatas, audioData);
+    const response = await getAiResponse(enhancedPrompt, provider || 'gemini-1.5-flash', history || [], user, imageDatas, audioData, videoData);
 
     // 🛡️ AI NOTE: If you overhaul or fix logic here, log it in the "History & Notes" column of the Master Map.
     res.json(response);

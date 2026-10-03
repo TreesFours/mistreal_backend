@@ -51,6 +51,16 @@ export class User extends Model {
     public byokBaseUrl!: string | null;
     public byokModelName!: string | null;
     public aiAutoSendEnabled!: boolean;
+
+    // 🎬 Separate BYOK slot for video EDITING (not generation — that's Veo, already
+    // wired server-side). No provider offers this in a text-chat-compatible shape,
+    // so it's its own slot rather than overloading byokProviderType above — a user
+    // might reasonably want ChatGPT for text AND Runway for video at the same time.
+    public byokVideoEnabled!: boolean;
+    public byokVideoProviderType!: string | null; // 'runway' | 'custom' (generic REST adapter)
+    public byokVideoEncryptedKey!: string | null;
+    public byokVideoBaseUrl!: string | null;
+    public byokVideoModelName!: string | null;
 }
 
 User.init({
@@ -101,7 +111,14 @@ User.init({
     byokEncryptedKey: { type: DataTypes.TEXT, allowNull: true },
     byokBaseUrl: { type: DataTypes.STRING, allowNull: true },
     byokModelName: { type: DataTypes.STRING, allowNull: true },
-    aiAutoSendEnabled: { type: DataTypes.BOOLEAN, defaultValue: false }
+    aiAutoSendEnabled: { type: DataTypes.BOOLEAN, defaultValue: false },
+
+    // 🎬 Separate BYOK slot for video editing (see class field comment above)
+    byokVideoEnabled: { type: DataTypes.BOOLEAN, defaultValue: false },
+    byokVideoProviderType: { type: DataTypes.STRING, allowNull: true },
+    byokVideoEncryptedKey: { type: DataTypes.TEXT, allowNull: true },
+    byokVideoBaseUrl: { type: DataTypes.STRING, allowNull: true },
+    byokVideoModelName: { type: DataTypes.STRING, allowNull: true }
 }, {
     sequelize,
     modelName: 'User',

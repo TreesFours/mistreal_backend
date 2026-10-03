@@ -6,6 +6,8 @@ import { OpenAiCompatibleProvider } from './ai/openAiCompatibleProvider';
 import { AnthropicProvider } from './ai/anthropicProvider';
 import { decrypt } from '../utils/secretCrypto';
 import { ProviderChatResponse } from './ai/types';
+import { VideoEditProvider } from './ai/videoEditProvider';
+import { storeMediaBase64, buildMediaUrl } from '../utils/mediaStore';
 
 const GOOGLE_AI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 
@@ -22,6 +24,7 @@ export interface AiResponse {
 export const IMAGE_GEN_MODEL_ID = 'imagen-3.0-generate-002';
 export const VIDEO_GEN_MODEL_ID = 'veo-2.0-generate-001';
 export const IMAGE_EDIT_MODEL_ID = 'gemini-2.5-flash-image';
+export const VIDEO_EDIT_PROVIDER_ID = 'byok-video-edit';
 
 // 📦 Professional Multipart File Handlers
 export const extractImageData = (file: Express.Multer.File): string => {
@@ -35,6 +38,12 @@ export const extractAudioData = (file: Express.Multer.File): string => {
     const allowed = ['audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/webm', 'audio/x-m4a'];
     if (!allowed.includes(file.mimetype)) throw new Error('Invalid intel format: Audio only');
     return file.buffer.toString('base64');
+};
+
+export const extractVideoData = (file: Express.Multer.File): { base64: string, mimeType: string } => {
+    const allowed = ['video/mp4', 'video/webm', 'video/quicktime', 'video/3gpp'];
+    if (!allowed.includes(file.mimetype)) throw new Error('Invalid intel format: Video only');
+    return { base64: file.buffer.toString('base64'), mimeType: file.mimetype };
 };
 
 /**
@@ -390,8 +399,29 @@ const generateVideo = async (prompt: string, apiKey: string): Promise<AiResponse
 /**
  * 🛡️ UNIVERSAL AI EXECUTION (With Smart Failover)
  */
-export const getAiResponse = async (prompt: string, provider: string, history: any[], user?: any, imageDatas?: string[], audioData?: string): Promise<AiResponse> => {
+export const getAiResponse = async (prompt: string, provider: string, history: any[], user?: any, imageDatas?: string[], audioData?: string, videoData?: { base64: string, mimeType: string }): Promise<AiResponse> => {
     const geminiKeyForGeneration = process.env.GEMINI_API_KEY;
+    if (provider === VIDEO_EDIT_PROVIDER_ID) {
+        if (!user?.byokVideoEnabled || !user?.byokVideoEncryptedKey) {
+            return { content: '', provider, success: false, error: 'No video editing provider configured — add one in Settings.' };
+        }
+        if (!videoData) {
+            return { content: '', provider, success: false, error: 'Attach a video to edit.' };
+        }
+        const apiKey = decrypt(user.byokVideoEncryptedKey);
+        const result = await VideoEditProvider.edit({
+            prompt, videoBase64: videoData.base64, mimeType: videoData.mimeType, apiKey,
+            baseUrl: user.byokVideoBaseUrl, modelName: user.byokVideoModelName
+        });
+        if (!result.success) {
+            return { content: '', provider, success: false, error: result.error };
+        }
+        // Normalize to a URL either way — if the provider handed back base64
+        // instead, host it ourselves (mediaStore.ts) so the app always gets a
+        // fetchable URL regardless of which shape the BYOK provider used.
+        const videoUrl = result.videoUrl || buildMediaUrl(storeMediaBase64(result.videoBase64!, 'video/mp4'));
+        return { content: '', provider: `byok-video:${user.byokVideoProviderType}`, success: true, generatedVideoUrl: videoUrl };
+    }
     if (provider === IMAGE_GEN_MODEL_ID) {
         if (!geminiKeyForGeneration) return { content: '', provider, success: false, error: 'Image generation is not configured.' };
         return generateImage(prompt, geminiKeyForGeneration);

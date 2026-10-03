@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { validate, byokKeySchema, byokClearSchema } from '../middleware/validationMiddleware';
+import { validate, byokKeySchema, byokClearSchema, byokVideoKeySchema } from '../middleware/validationMiddleware';
 import { getOrCreateUserInternal } from '../utils/userResolver';
 import { encrypt, isEncryptionConfigured } from '../utils/secretCrypto';
 import logger from '../utils/logger';
@@ -77,6 +77,81 @@ router.get('/status', async (req: Request, res: Response) => {
             providerType: user.byokProviderType,
             modelName: user.byokModelName,
             baseUrl: user.byokBaseUrl
+        });
+    } catch (error: any) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// --- Separate BYOK slot for video editing — same pattern as above, different
+// User fields (byokVideo*), since a user might configure a text provider and
+// a video provider independently. See userModel.ts for why this isn't just
+// another providerType value on the slot above. ---
+
+router.post('/video-key', validate(byokVideoKeySchema), async (req: Request, res: Response) => {
+    try {
+        if (!isEncryptionConfigured()) {
+            return res.status(503).json({ success: false, error: 'BYOK_UNAVAILABLE: encryption not configured on this server.' });
+        }
+
+        const { deviceId, firebaseUid, providerType, apiKey, baseUrl, modelName } = req.body;
+        const user = await getOrCreateUserInternal(deviceId, firebaseUid);
+        if (!user) return res.status(404).json({ success: false, error: 'User system unavailable' });
+
+        user.byokVideoEnabled = true;
+        user.byokVideoProviderType = providerType;
+        user.byokVideoEncryptedKey = encrypt(apiKey);
+        user.byokVideoBaseUrl = baseUrl ?? null;
+        user.byokVideoModelName = modelName ?? null;
+        await user.save();
+
+        res.json({
+            success: true,
+            configured: true,
+            providerType: user.byokVideoProviderType,
+            modelName: user.byokVideoModelName,
+            baseUrl: user.byokVideoBaseUrl
+        });
+    } catch (error: any) {
+        logger.error(`❌ BYOK video key save error: ${error.message}`);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+router.post('/video-clear', validate(byokClearSchema), async (req: Request, res: Response) => {
+    try {
+        const { deviceId, firebaseUid } = req.body;
+        const user = await getOrCreateUserInternal(deviceId, firebaseUid);
+        if (!user) return res.status(404).json({ success: false, error: 'User system unavailable' });
+
+        user.byokVideoEnabled = false;
+        user.byokVideoProviderType = null;
+        user.byokVideoEncryptedKey = null;
+        user.byokVideoBaseUrl = null;
+        user.byokVideoModelName = null;
+        await user.save();
+
+        res.json({ success: true, configured: false });
+    } catch (error: any) {
+        logger.error(`❌ BYOK video key clear error: ${error.message}`);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+router.get('/video-status', async (req: Request, res: Response) => {
+    try {
+        const deviceId = req.query.deviceId as string;
+        if (!deviceId) return res.status(400).json({ success: false, error: 'deviceId is required' });
+
+        const user = await getOrCreateUserInternal(deviceId, req.query.firebaseUid as string | undefined);
+        if (!user) return res.status(404).json({ success: false, error: 'User system unavailable' });
+
+        res.json({
+            success: true,
+            configured: !!user.byokVideoEnabled,
+            providerType: user.byokVideoProviderType,
+            modelName: user.byokVideoModelName,
+            baseUrl: user.byokVideoBaseUrl
         });
     } catch (error: any) {
         res.status(500).json({ success: false, error: error.message });
