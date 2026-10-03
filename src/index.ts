@@ -33,6 +33,7 @@ import userRoutes from './routes/userRoutes';
 import { validate, chatSchema, socialActionSchema, userSettingsSchema } from './middleware/validationMiddleware';
 import { getOrCreateUserInternal } from './utils/userResolver';
 import aiProviderRoutes from './routes/aiProviderRoutes';
+import emergencyRoutes from './routes/emergencyRoutes';
 
 dotenv.config();
 
@@ -78,6 +79,7 @@ app.use('/api/social', socialRoutes);
 app.use('/api/webhook', webhookRoutes);
 app.use('/api/user', userRoutes); // Combined /api/user/settings and /api/user/platforms
 app.use('/api/ai-provider', aiProviderRoutes);
+app.use('/api/emergency', emergencyRoutes);
 
 app.get('/', (req, res) => res.send('🚀 Mistreal Backend Running'));
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date() }));

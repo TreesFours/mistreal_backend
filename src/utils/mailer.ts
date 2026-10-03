@@ -1,18 +1,67 @@
 import nodemailer from 'nodemailer';
 
-export const sendMilestoneEmail = async (userCount: number) => {
+const getTransporter = () => {
     const user = process.env.GMAIL_USER;
     const pass = process.env.GMAIL_APP_PASS;
+    if (!user || !pass) return null;
+    return nodemailer.createTransport({ service: 'gmail', auth: { user, pass } });
+};
 
-    if (!user || !pass) {
+/**
+ * 🆘 Emergency alert email to a saved emergency contact. Separate from the
+ * milestone email's fire-and-forget pattern — callers (emergencyRoutes) need
+ * the real success/failure per-contact to report back how many were notified.
+ */
+export const sendEmergencyAlertEmail = async (
+    toEmail: string,
+    contactName: string,
+    senderName: string,
+    distressSignature: string,
+    latitude: number,
+    longitude: number
+): Promise<boolean> => {
+    const transporter = getTransporter();
+    const user = process.env.GMAIL_USER;
+    if (!transporter || !user) {
+        console.warn('⚠️ GMAIL_USER or GMAIL_APP_PASS not set. Emergency email skipped.');
+        return false;
+    }
+
+    const mapsLink = `https://www.google.com/maps?q=${latitude},${longitude}`;
+    const mailOptions = {
+        from: user,
+        to: toEmail,
+        subject: `🆘 SOS Alert from ${senderName || 'a Mistreal contact'}`,
+        text: `${contactName}, this is an emergency alert from ${senderName || 'your Mistreal contact'}.\n\nReason: ${distressSignature}\nLast known location: ${mapsLink}\n\nThis alert was sent automatically by the Mistreal app.`,
+        html: `
+            <div style="font-family: sans-serif; padding: 20px; border: 2px solid #D32F2F;">
+                <h2 style="color: #D32F2F;">🆘 SOS Alert</h2>
+                <p><strong>${contactName}</strong>, this is an emergency alert from <strong>${senderName || 'your Mistreal contact'}</strong>.</p>
+                <p>Reason: ${distressSignature}</p>
+                <p>Last known location: <a href="${mapsLink}">${mapsLink}</a></p>
+                <p style="color: #666; font-size: 12px;">This alert was sent automatically by the Mistreal app.</p>
+            </div>
+        `
+    };
+
+    try {
+        await transporter.sendMail(mailOptions);
+        console.log(`✅ Emergency email sent to ${toEmail}`);
+        return true;
+    } catch (error: any) {
+        console.error(`❌ Error sending emergency email to ${toEmail}:`, error.message);
+        return false;
+    }
+};
+
+export const sendMilestoneEmail = async (userCount: number) => {
+    const transporter = getTransporter();
+    const user = process.env.GMAIL_USER;
+
+    if (!transporter || !user) {
         console.warn('⚠️ GMAIL_USER or GMAIL_APP_PASS not set. Milestone email skipped.');
         return;
     }
-
-    const transporter = nodemailer.createTransport({
-        service: 'gmail',
-        auth: { user, pass }
-    });
 
     const mailOptions = {
         from: user,
