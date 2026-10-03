@@ -205,7 +205,11 @@ export const getAvailableModels = async (isPro: boolean, freeUserCount: number =
                         capabilities: { text: true, imageGen: false, videoGen: false, voice: false }
                     }));
 
-                models = [...models, ...freeOpenRouter, ...(isPro ? premium : [])];
+                // Always include premium models in the catalog — the client renders
+                // isProOnly entries as locked (upsell visibility) rather than hiding
+                // them. Gating them out here meant free users never even received
+                // the premium catalog to show as locked.
+                models = [...models, ...freeOpenRouter, ...premium];
             }
         } catch (e) {}
     }
@@ -241,7 +245,12 @@ export const getAvailableModels = async (isPro: boolean, freeUserCount: number =
         ];
     }
 
-    return isPro ? models : models.filter((m: any) => !m.isProOnly);
+    // Return the full catalog regardless of tier — isProOnly is metadata for the
+    // client to lock/badge against, not a server-side visibility filter. Stripping
+    // pro-only entries here (as this used to do) hid Gemini Pro AND every
+    // OpenRouter premium model from free users entirely, instead of showing them
+    // locked, which is what the drawer's Free/Premium sub-tabs actually expect.
+    return models;
 };
 
 /**
