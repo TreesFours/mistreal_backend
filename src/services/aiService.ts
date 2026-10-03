@@ -21,6 +21,7 @@ export interface AiResponse {
 
 export const IMAGE_GEN_MODEL_ID = 'imagen-3.0-generate-002';
 export const VIDEO_GEN_MODEL_ID = 'veo-2.0-generate-001';
+export const IMAGE_EDIT_MODEL_ID = 'gemini-2.5-flash-image';
 
 // 📦 Professional Multipart File Handlers
 export const extractImageData = (file: Express.Multer.File): string => {
@@ -241,6 +242,19 @@ export const getAvailableModels = async (isPro: boolean, freeUserCount: number =
                 health: 100,
                 features: 1,
                 capabilities: { text: false, imageGen: false, videoGen: true, voice: false }
+            },
+            {
+                // Free by deliberate choice: background/subject editing should have
+                // a free path even though generation (Imagen/Veo) is Pro-only.
+                id: IMAGE_EDIT_MODEL_ID,
+                name: 'Gemini Image Edit (Background/Subject)',
+                provider: 'google',
+                isProOnly: false,
+                price: 'Free',
+                quota: `${Math.floor(GEMINI_FREE_DAILY_LIMIT / freeUserCount)} req/day`,
+                health: 100,
+                features: 1,
+                capabilities: { text: false, imageGen: true, videoGen: false, voice: false }
             }
         ];
     }
@@ -277,6 +291,54 @@ const generateImage = async (prompt: string, apiKey: string): Promise<AiResponse
         logger.error('❌ Imagen generation failed:', error.response?.data || error.message);
         return {
             content: '', provider: IMAGE_GEN_MODEL_ID, success: false,
+            error: error.response?.data?.error?.message || error.message
+        };
+    }
+};
+
+/**
+ * 🖌️ Image EDITING (not generation from scratch) — input image + instruction
+ * ("change the background to a beach", "turn the person into a fox") via
+ * Gemini's multimodal generateContent with image output. This is a genuinely
+ * different capability from Imagen's text-to-image :predict call above, and
+ * from Veo's video generation — it takes an existing image and transforms it.
+ *
+ * UNVERIFIED: Gemini's image-output ("nano banana") models and their exact
+ * current model id are a newer, faster-moving surface than text chat —
+ * confirm IMAGE_EDIT_MODEL_ID is still correct against a live account before
+ * relying on this; Google renames/versions these relatively often.
+ */
+const editImage = async (prompt: string, imageBase64: string, mimeType: string, apiKey: string): Promise<AiResponse> => {
+    try {
+        const response = await axios.post(
+            `${GOOGLE_AI_BASE_URL}/models/${IMAGE_EDIT_MODEL_ID}:generateContent?key=${apiKey}`,
+            {
+                contents: [{
+                    parts: [
+                        { text: prompt },
+                        { inline_data: { mime_type: mimeType, data: imageBase64 } }
+                    ]
+                }],
+                generationConfig: { responseModalities: ['IMAGE'] }
+            }
+        );
+        const parts = response.data?.candidates?.[0]?.content?.parts || [];
+        const imagePart = parts.find((p: any) => p.inlineData || p.inline_data);
+        const inline = imagePart?.inlineData || imagePart?.inline_data;
+        if (!inline?.data) {
+            return { content: '', provider: IMAGE_EDIT_MODEL_ID, success: false, error: 'Model returned no edited image.' };
+        }
+        return {
+            content: '',
+            provider: IMAGE_EDIT_MODEL_ID,
+            success: true,
+            generatedImageBase64: inline.data,
+            generatedImageMimeType: inline.mimeType || inline.mime_type || 'image/png'
+        };
+    } catch (error: any) {
+        logger.error('❌ Image edit failed:', error.response?.data || error.message);
+        return {
+            content: '', provider: IMAGE_EDIT_MODEL_ID, success: false,
             error: error.response?.data?.error?.message || error.message
         };
     }
@@ -337,6 +399,13 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
     if (provider === VIDEO_GEN_MODEL_ID) {
         if (!geminiKeyForGeneration) return { content: '', provider, success: false, error: 'Video generation is not configured.' };
         return generateVideo(prompt, geminiKeyForGeneration);
+    }
+    if (provider === IMAGE_EDIT_MODEL_ID) {
+        if (!geminiKeyForGeneration) return { content: '', provider, success: false, error: 'Image editing is not configured.' };
+        if (!imageDatas || imageDatas.length === 0) return { content: '', provider, success: false, error: 'Attach an image to edit.' };
+        // Same mime-type convention as GeminiProvider.chat — imageDatas doesn't
+        // carry its original mime type through the pipeline, only validated bytes.
+        return editImage(prompt, imageDatas[0], 'image/jpeg', geminiKeyForGeneration);
     }
 
     const geminiKey = process.env.GEMINI_API_KEY;

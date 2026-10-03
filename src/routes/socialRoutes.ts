@@ -9,6 +9,7 @@ import { authenticateUser, optionalAuthenticateUser } from '../utils/authMiddlew
 import logger from '../utils/logger';
 
 import { validate, socialActionSchema } from '../middleware/validationMiddleware';
+import { storeMediaBase64, buildMediaUrl } from '../utils/mediaStore';
 
 const router = Router();
 
@@ -275,8 +276,17 @@ router.post('/action', authenticateUser, validate(socialActionSchema), async (re
     try {
         const user = await getResolvedUser(req);
         if (!user) return res.status(404).json({ error: 'User not found' });
-        const { platform, type, content, targetId } = req.body;
-        const result = await sendSocialAction(user, { platform, type, content, targetId });
+        const { platform, type, content, targetId, mediaBase64, mediaMimeType } = req.body;
+
+        // AI-generated/edited images only exist as base64 — host it briefly on our
+        // own backend so Zernio has a real URL to fetch (see mediaStore.ts).
+        let mediaUrl: string | undefined;
+        if (mediaBase64) {
+            const id = storeMediaBase64(mediaBase64, mediaMimeType || 'image/jpeg');
+            mediaUrl = buildMediaUrl(id);
+        }
+
+        const result = await sendSocialAction(user, { platform, type, content, targetId, mediaUrl });
         res.json(result);
     } catch (error: any) { res.status(500).json({ error: error.message }); }
 });

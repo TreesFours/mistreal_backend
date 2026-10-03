@@ -339,9 +339,9 @@ export const reconcileUserPlatforms = async (user: User): Promise<string[]> => {
     }
 };
 
-export const sendSocialAction = async (user: User, action: { platform: string, type: string, content: string, targetId?: string }) => {
+export const sendSocialAction = async (user: User, action: { platform: string, type: string, content: string, targetId?: string, mediaUrl?: string }) => {
     if (!user.zernioProfileId) throw new Error('Connect your social profile first.');
-    return await ZernioAdapter.sendAction(user.zernioProfileId, action.platform, action.content, action.type, action.targetId);
+    return await ZernioAdapter.sendAction(user.zernioProfileId, action.platform, action.content, action.type, action.targetId, action.mediaUrl);
 };
 
 /**

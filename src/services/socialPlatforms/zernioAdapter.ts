@@ -119,7 +119,7 @@ export const ZernioAdapter = {
   /**
    * Step 4: Dispatch Content or Perform Actions (Like/Follow/DM)
    */
-  sendAction: async (profileId: string, platform: string, content: string, type: string, targetId?: string) => {
+  sendAction: async (profileId: string, platform: string, content: string, type: string, targetId?: string, mediaUrl?: string) => {
     try {
       if (!profileId) throw new Error('Security Error: profileId is required for multi-tenant isolation.');
 
@@ -145,11 +145,20 @@ export const ZernioAdapter = {
       }
 
       if (type === 'Direct Message') {
+        // UNVERIFIED media shape: Zernio's /messages endpoint accepting an
+        // attachments array alongside text is our best guess at the convention
+        // (matches how most unified-messaging APIs shape a media DM) — not
+        // confirmed against real docs/a live send. Verify before depending on
+        // media delivery in production; text-only DMs are unaffected either way.
+        const messageContent: any = { text: content };
+        if (mediaUrl) {
+          messageContent.attachments = [{ type: 'image', url: mediaUrl }];
+        }
         const response = await axios.post(`${ZERNIO_API_URL}/messages`, {
             platform,
             accountId: account._id,
             recipientId: targetId,
-            content: { text: content }
+            content: messageContent
         }, {
             headers: { 'Authorization': `Bearer ${getApiKey()}` }
         });

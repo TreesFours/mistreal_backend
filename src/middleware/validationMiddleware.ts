@@ -47,6 +47,8 @@ export const socialActionSchema = z.object({
         platform: z.string({ required_error: "Platform is required" }),
         content: z.string({ required_error: "Content is required" }),
         targetId: z.string().optional(),
+        mediaBase64: z.string().optional(),
+        mediaMimeType: z.string().optional(),
     })
 });
 

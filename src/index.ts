@@ -33,6 +33,7 @@ import webhookRoutes from './routes/webhookRoutes';
 import userRoutes from './routes/userRoutes';
 import { validate, chatSchema, socialActionSchema, userSettingsSchema } from './middleware/validationMiddleware';
 import { getOrCreateUserInternal } from './utils/userResolver';
+import { getStoredMedia } from './utils/mediaStore';
 import aiProviderRoutes from './routes/aiProviderRoutes';
 import emergencyRoutes from './routes/emergencyRoutes';
 import emailRoutes from './routes/emailRoutes';
@@ -86,6 +87,16 @@ app.use('/api/email', emailRoutes);
 
 app.get('/', (req, res) => res.send('🚀 Mistreal Backend Running'));
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date() }));
+
+// 🖼️ Short-lived media host — see mediaStore.ts. Lets AI-generated/edited
+// images (which only exist as base64 in a chat response) be handed to Zernio
+// as a fetchable URL for social DM delivery.
+app.get('/media/:id', (req, res) => {
+    const media = getStoredMedia(req.params.id);
+    if (!media) return res.status(404).send('Not found or expired');
+    res.set('Content-Type', media.mimeType);
+    res.send(media.buffer);
+});
 
 // 🧠 AI Chat
 app.post('/api/chat', upload.fields([{ name: 'images', maxCount: 5 }, { name: 'audio', maxCount: 1 }]), validate(chatSchema), async (req, res) => {
