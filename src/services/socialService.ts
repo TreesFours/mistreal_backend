@@ -51,38 +51,79 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
             console.info(`🚰 [SYNC] Hydrating ${unhydrated.join(', ')} from Zernio for Profile: ${user.zernioProfileId}`);
             try {
                 // Fetch both DMs (Inbox) AND Social Posts (Feed)
-                const [inboxItems, feedItems] = await Promise.all([
+                const [inboxItemsRaw, feedItemsRaw] = await Promise.all([
                     ZernioAdapter.fetchInbox(user.zernioProfileId),
                     ZernioAdapter.fetchFeed(user.zernioProfileId)
                 ]);
+                // Zernio is expected to return an array for both — guard against a
+                // malformed/non-array response shape so a spread below can't throw
+                // and silently blank out the whole feed.
+                const inboxItems = Array.isArray(inboxItemsRaw) ? inboxItemsRaw : [];
+                const feedItems = Array.isArray(feedItemsRaw) ? feedItemsRaw : [];
+                const feedItemSet = new Set(feedItems);
 
                 const allRemoteItems = [...inboxItems, ...feedItems]
-                    .filter((it: any) => unhydrated.includes(normalizePlatformId(it.platform)));
+                    .filter((it: any) => unhydrated.includes(normalizePlatformId(it?.platform)));
                 console.info(`📥 [SYNC] Zernio returned ${inboxItems.length} Inbox items and ${feedItems.length} Feed items (${allRemoteItems.length} for newly-connected platforms).`);
 
                 if (inboxItems.length === 0 && feedItems.length === 0) {
                     syncWarnings.push(`Zernio returned zero items for profile ${user.zernioProfileId} — either the connected account(s) have no content yet, or Zernio isn't returning data for ${unhydrated.join(', ')} (some platforms, e.g. LinkedIn, restrict third-party read access by policy).`);
                 }
 
+                // Raw Zernio items arrive in Zernio's own field shape, not the
+                // {_id, platform, author:{id,name}, content:{text,attachments}, ...}
+                // shape the rest of this function (and posts.map below) assumes —
+                // without normalizing here, a fresh hydration would silently render
+                // blank author/text/image fields even though Zernio has real data.
+                // Exact Zernio field names are UNVERIFIED against a live account;
+                // these fallbacks cover the common aliases seen across social APIs —
+                // adjust here first if real payloads use different keys.
+                const normalizedRemoteItems: any[] = [];
                 for (const it of allRemoteItems) {
+                    try {
+                        const rawAuthor = it.author || it.user || it.sender || {};
+                        const rawAttachments = it.content?.attachments || it.media || it.attachments || [];
+                        const externalId = it._id || it.id;
+                        if (!externalId || !it.platform) continue; // can't persist/display without these
+                        normalizedRemoteItems.push({
+                            _id: externalId,
+                            platform: it.platform,
+                            author: {
+                                id: rawAuthor.id || rawAuthor._id || rawAuthor.userId || rawAuthor.handle || rawAuthor.username || null,
+                                name: rawAuthor.name || rawAuthor.displayName || rawAuthor.display_name || rawAuthor.handle || rawAuthor.username || 'Social Contact'
+                            },
+                            content: {
+                                text: it.content?.text || it.content?.body || it.text || it.message || it.caption || '',
+                                attachments: Array.isArray(rawAttachments) ? rawAttachments : []
+                            },
+                            createdAt: it.createdAt || it.created_at || it.timestamp || new Date(),
+                            metadata: it.metadata || {},
+                            type: it.type || (feedItemSet.has(it) ? 'post' : 'message')
+                        });
+                    } catch (normErr: any) {
+                        console.error(`[SYNC] Skipping one malformed Zernio item: ${normErr.message}`);
+                    }
+                }
+
+                for (const it of normalizedRemoteItems) {
                     await SocialEvent.findOrCreate({
-                        where: { externalId: it._id || it.id },
+                        where: { externalId: it._id },
                         defaults: {
                             deviceId: user.deviceId,
                             platform: it.platform.toLowerCase(),
-                            type: it.type || (feedItems.includes(it) ? 'post' : 'message'),
-                            externalId: it._id || it.id,
-                            senderId: it.author?.id,
-                            senderName: it.author?.name || it.author?.handle || 'Social Contact',
-                            content: it.content?.text || it.content?.body || "",
-                            metadata: it.metadata || {},
-                            timestamp: it.createdAt || new Date()
+                            type: it.type,
+                            externalId: it._id,
+                            senderId: it.author.id,
+                            senderName: it.author.name,
+                            content: it.content.text,
+                            metadata: { ...it.metadata, attachments: it.content.attachments },
+                            timestamp: it.createdAt
                         }
                     });
                 }
-                items = [...items, ...allRemoteItems];
+                items = [...items, ...normalizedRemoteItems];
             } catch (fetchError: any) {
-                console.error(`❌ [SYNC] Zernio Fetch Failed: ${fetchError.message}`);
+                console.error(`❌ [SYNC] Zernio Fetch Failed: ${fetchError.message}`, fetchError);
                 syncWarnings.push(`Zernio sync failed for ${unhydrated.join(', ')}: ${fetchError.response?.data?.error || fetchError.message}`);
             }
         } else if (unhydrated.length > 0 && !user.zernioProfileId) {
@@ -111,39 +152,48 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
             return acc;
         }, []);
 
-        const posts = filteredItems.map((it: any) => {
-            const def = getPlatformDefinition(it.platform);
+        // Built item-by-item with each item isolated in its own try/catch —
+        // one malformed item (an unexpected Zernio field shape) must degrade to
+        // "skip this one post", not blank out the entire feed via the outer catch.
+        const posts: any[] = [];
+        for (const it of filteredItems) {
+            try {
+                const def = getPlatformDefinition(it.platform);
 
-            // Extract image/video from attachments if available
-            const attachments = it.content?.attachments || it.metadata?.attachments || [];
-            const imageUrl = attachments.find((a: any) => a.type === 'image')?.url || null;
-            const videoUrl = attachments.find((a: any) => a.type === 'video')?.url || null;
+                // Extract image/video from attachments if available
+                const rawAttachments = it.content?.attachments || it.metadata?.attachments || [];
+                const attachments = Array.isArray(rawAttachments) ? rawAttachments : [];
+                const imageUrl = attachments.find((a: any) => a?.type === 'image')?.url || null;
+                const videoUrl = attachments.find((a: any) => a?.type === 'video')?.url || null;
 
-            // Resolve the real content kind. Zernio's raw items don't consistently
-            // flag stories/reels, so check both a dedicated `type` and metadata hints
-            // before falling back to a generic "post".
-            const isStory = it.type === 'story' || it.metadata?.is_story === true || it.metadata?.media_product_type === 'STORY';
-            const isReel = !isStory && (it.type === 'reel' || it.metadata?.is_reel === true || it.metadata?.media_product_type === 'REELS' || (videoUrl && it.metadata?.media_type === 'VIDEO'));
-            const resolvedType = isStory ? 'story' : isReel ? 'reel' : (it.type || 'post');
+                // Resolve the real content kind. Zernio's raw items don't consistently
+                // flag stories/reels, so check both a dedicated `type` and metadata hints
+                // before falling back to a generic "post".
+                const isStory = it.type === 'story' || it.metadata?.is_story === true || it.metadata?.media_product_type === 'STORY';
+                const isReel = !isStory && (it.type === 'reel' || it.metadata?.is_reel === true || it.metadata?.media_product_type === 'REELS' || (videoUrl && it.metadata?.media_type === 'VIDEO'));
+                const resolvedType = isStory ? 'story' : isReel ? 'reel' : (it.type || 'post');
 
-            return {
-                id: it._id || it.id,
-                platform: it.platform,
-                author: it.author?.name || it.author?.handle || 'Social Contact',
-                content: it.content?.text || it.content?.body || '',
-                timestamp: it.createdAt || it.timestamp || new Date().toISOString(),
-                type: resolvedType,
-                imageUrl: imageUrl,
-                videoUrl: videoUrl,
-                sourceUrl: it.source_url || it.url || null,
-                platformIcon: def?.icon || '🔗',
-                platformColor: def?.color || '#888',
-                platformDisplayName: def?.displayName || it.platform,
-                commentsCount: it.metadata?.comments_count || 0,
-                likes: it.metadata?.likes_count || 0,
-                comments: it.metadata?.comments || []
-            };
-        });
+                posts.push({
+                    id: it._id || it.id,
+                    platform: it.platform,
+                    author: it.author?.name || it.author?.handle || 'Social Contact',
+                    content: it.content?.text || it.content?.body || '',
+                    timestamp: it.createdAt || it.timestamp || new Date().toISOString(),
+                    type: resolvedType,
+                    imageUrl: imageUrl,
+                    videoUrl: videoUrl,
+                    sourceUrl: it.source_url || it.url || null,
+                    platformIcon: def?.icon || '🔗',
+                    platformColor: def?.color || '#888',
+                    platformDisplayName: def?.displayName || it.platform,
+                    commentsCount: it.metadata?.comments_count || 0,
+                    likes: it.metadata?.likes_count || 0,
+                    comments: it.metadata?.comments || []
+                });
+            } catch (itemError: any) {
+                console.error(`[SYNC] Skipping one post that failed to render: ${itemError.message}`, it);
+            }
+        }
 
         return {
             summary: items.length > 0 ? `Unified Intelligence: ${items.length} new signals.` : 'Your intelligence feeds are silent.',
@@ -153,7 +203,10 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
             syncWarnings
         };
     } catch (error: any) {
-        return { summary: "SYNC_ERROR", platformUpdates: [], posts: [], rawContent: "" };
+        // This used to swallow the error completely — a blank feed with zero
+        // diagnostic info, impossible to tell apart from "genuinely no content".
+        logger.error(`❌ [SYNC] getSocialSummary crashed for device ${user.deviceId}: ${error.message}`, error);
+        return { summary: "SYNC_ERROR", platformUpdates: [], posts: [], rawContent: "", syncWarnings: [`Feed sync crashed: ${error.message}`] };
     }
 };
 

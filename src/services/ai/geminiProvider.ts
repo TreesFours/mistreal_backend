@@ -37,7 +37,10 @@ export const GeminiProvider: AiProvider = {
 
                 const currentParts: any[] = [{ text: req.prompt }];
                 if (req.imageDatas) req.imageDatas.forEach((d) => currentParts.push({ inline_data: { mime_type: 'image/jpeg', data: d } }));
-                if (req.audioData) currentParts.push({ inline_data: { mime_type: 'audio/mp3', data: req.audioData } });
+                // The app's recorder actually produces AAC audio (M4A container), not MP3 —
+                // telling Gemini it's audio/mp3 when the bytes are AAC risks it failing to
+                // decode the clip correctly.
+                if (req.audioData) currentParts.push({ inline_data: { mime_type: 'audio/aac', data: req.audioData } });
                 contents.push({ role: 'user', parts: currentParts });
 
                 const url = `${GOOGLE_AI_BASE_URL}/models/${cleanModelName}:generateContent?key=${req.apiKey}`;

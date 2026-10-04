@@ -38,7 +38,9 @@ export const extractImageData = (file: Express.Multer.File): string => {
 };
 
 export const extractAudioData = (file: Express.Multer.File): string => {
-    const allowed = ['audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/webm', 'audio/x-m4a'];
+    // audio/mp4 is what Android's MimeTypeMap actually reports for a ".m4a" file
+    // (MPEG-4/AAC container) — audio/x-m4a is kept for other clients that use it.
+    const allowed = ['audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/webm', 'audio/x-m4a', 'audio/mp4'];
     if (!allowed.includes(file.mimetype)) throw new Error('Invalid intel format: Audio only');
     return file.buffer.toString('base64');
 };
@@ -634,6 +636,17 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
 
     if (orResult.success) {
         return { content: orResult.content, provider: orResult.modelUsed, success: true };
+    }
+
+    // Mirror the Gemini->OpenRouter emergency pivot in the other direction —
+    // OpenRouter's free catalog rotates/deprecates models often, so a selected
+    // free model id (or every item in the fallback chain) can go stale and dead-end
+    // the whole request with nothing to show, even though the app's own Gemini key
+    // could still answer. Guard against infinite recursion since isGoogleModel
+    // already short-circuits normal Gemini-model requests above this branch.
+    if (geminiKey && isGoogleModel === false && activeProvider !== 'gemini-1.5-flash') {
+        logger.error(`🚨 Global OpenRouter failure (${orResult.error}). Pivoting to Gemini bridge...`);
+        return await getAiResponse(prompt, 'gemini-1.5-flash', history, user, imageDatas, audioData);
     }
 
     return { content: '', provider: activeProvider, success: false, error: orResult.error };
