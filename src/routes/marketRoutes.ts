@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { Op } from 'sequelize';
 import { getOrCreateUserInternal } from '../utils/userResolver';
 import { MarketAlert } from '../models/MarketAlert';
-import { getQuote } from '../services/marketDataService';
+import { getQuote, getCandles } from '../services/marketDataService';
 import logger from '../utils/logger';
 
 const router = Router();
@@ -26,10 +26,33 @@ router.get('/watchlist', async (_req: Request, res: Response) => {
                 symbol, assetClass
             }))
         );
-        res.json({ success: true, quotes: quotes.filter(q => q.price !== undefined) });
+        const available = quotes.filter(q => q.price !== undefined);
+        if (available.length < quotes.length) {
+            // getQuote() already logged the specific cause per symbol above —
+            // this line is the "requested N, got M" summary so a partial
+            // watchlist is never silently mistaken for "everything's fine."
+            const missing = quotes.filter(q => q.price === undefined).map(q => q.symbol);
+            logger.warn(`⚠️ [Markets] /watchlist: ${available.length}/${quotes.length} quotes available — missing: ${missing.join(', ')}`);
+        }
+        res.json({ success: true, quotes: available });
     } catch (e: any) {
         logger.error(`❌ GET /markets/watchlist error: ${e.message}`);
         res.status(200).json({ success: false, quotes: [], error: e.message });
+    }
+});
+
+router.get('/candles', async (req: Request, res: Response) => {
+    try {
+        const { symbol, assetClass } = req.query;
+        if (!symbol || !assetClass) {
+            return res.status(200).json({ success: false, candles: [], error: 'symbol and assetClass are required' });
+        }
+        const candles = await getCandles(String(symbol), String(assetClass));
+        if (!candles) return res.status(200).json({ success: false, candles: [], error: 'Chart data unavailable for this symbol right now' });
+        res.json({ success: true, candles });
+    } catch (e: any) {
+        logger.error(`❌ GET /markets/candles error: ${e.message}`);
+        res.status(200).json({ success: false, candles: [], error: e.message });
     }
 });
 

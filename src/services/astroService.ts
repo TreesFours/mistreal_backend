@@ -242,6 +242,8 @@ const getMoonAziAlt = async (lat: number, lon: number) => {
                 return { azimuth: parseFloat(parts[4]), elevation: parseFloat(parts[5]) };
             }
         }
-    } catch (e) {}
+    } catch (e: any) {
+        logger.warn(`⚠️ [Astro] getMoonAziAlt failed (relativeToMoon will read "unknown"): ${e.message}`);
+    }
     return null;
 };

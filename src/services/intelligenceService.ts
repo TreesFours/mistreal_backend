@@ -340,7 +340,9 @@ export class IntelligenceService {
             };
 
             await this.updateBuffer('astro', [astroItem]);
-        } catch (e) {}
+        } catch (e: any) {
+            logger.warn(`⚠️ [Intel] refreshAstro failed: ${e.message}`);
+        }
     }
 
     private static async refreshWiki() {
@@ -367,7 +369,9 @@ export class IntelligenceService {
                 timestamp: new Date().toISOString()
             }];
             await this.updateBuffer('wiki', article, 5); // keep a few days of history even though it refreshes daily
-        } catch (e) {}
+        } catch (e: any) {
+            logger.warn(`⚠️ [Intel] refreshWiki failed: ${e.message}`);
+        }
     }
 
     private static async refreshJournals() {
@@ -383,7 +387,9 @@ export class IntelligenceService {
                 timestamp: new Date().toISOString()
             }];
             await this.updateBuffer('journals', journals);
-        } catch (e) {}
+        } catch (e: any) {
+            logger.warn(`⚠️ [Intel] refreshJournals failed: ${e.message}`);
+        }
     }
 
     // Best-effort: prefer a real, readable copy on archive.org (where OpenLibrary
@@ -397,7 +403,8 @@ export class IntelligenceService {
             const editions = editionsResp.data?.entries || [];
             const readable = editions.find((e: any) => e.ocaid);
             return readable ? `https://archive.org/details/${readable.ocaid}` : catalogUrl;
-        } catch (e) {
+        } catch (e: any) {
+            logger.info(`ℹ️ [Intel] No readable-copy lookup for ${workKey}, falling back to catalog link: ${e.message}`);
             return catalogUrl;
         }
     }
@@ -423,7 +430,9 @@ export class IntelligenceService {
                 timestamp: new Date().toISOString()
             })));
             await this.updateBuffer('novels', novels, 16); // wider than its own 2-week refresh cycle
-        } catch (e) {}
+        } catch (e: any) {
+            logger.warn(`⚠️ [Intel] refreshLiterature failed: ${e.message}`);
+        }
     }
 
     /**
@@ -446,7 +455,9 @@ export class IntelligenceService {
                     if (weather.country) user.lastKnownCountry = weather.country;
                     user.lastLocationUpdate = new Date();
                     await user.save();
-                } catch (e) {}
+                } catch (e: any) {
+                    logger.warn(`⚠️ [Intel] refreshProactiveWeather failed for device ${user.deviceId}: ${e.message}`);
+                }
             }
         }
     }

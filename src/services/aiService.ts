@@ -231,7 +231,9 @@ export const getAvailableModels = async (isPro: boolean, freeUserCount: number =
                 // the premium catalog to show as locked.
                 models = [...models, ...freeOpenRouter, ...premium];
             }
-        } catch (e) {}
+        } catch (e: any) {
+            logger.warn(`⚠️ OpenRouter model catalog fetch failed — catalog will be missing those models: ${e.message}`);
+        }
     }
 
     // 🎨 Generation models (Imagen/Veo) — kept Pro-only for now since generation
@@ -433,6 +435,10 @@ export const getAiResponse = async (
     const startImageBase64 = imageDatas && roleIndex('start') >= 0 ? imageDatas[roleIndex('start')] : undefined;
     const endImageBase64 = imageDatas && roleIndex('end') >= 0 ? imageDatas[roleIndex('end')] : undefined;
     const referenceImageBase64 = imageDatas && roleIndex('character') >= 0 ? imageDatas[roleIndex('character')] : undefined;
+    // Multi-face video targeting: a copy of a video frame with the specific
+    // face to swap highlighted, so "swap only this one" has a visual pointer
+    // instead of relying on "the main person" when several people are in shot.
+    const faceTargetImageBase64 = imageDatas && roleIndex('face_target') >= 0 ? imageDatas[roleIndex('face_target')] : undefined;
 
     if (provider === VIDEO_EDIT_PROVIDER_ID) {
         if (!user?.byokVideoEnabled || !user?.byokVideoEncryptedKey) {
@@ -444,7 +450,7 @@ export const getAiResponse = async (
         const apiKey = decrypt(user.byokVideoEncryptedKey);
         const result = await VideoEditProvider.edit({
             prompt, videoBase64: videoData.base64, mimeType: videoData.mimeType, apiKey,
-            startImageBase64, endImageBase64, referenceImageBase64, imageMimeType: 'image/jpeg',
+            startImageBase64, endImageBase64, referenceImageBase64, faceTargetImageBase64, imageMimeType: 'image/jpeg',
             baseUrl: user.byokVideoBaseUrl, modelName: user.byokVideoModelName
         });
         if (!result.success) {
@@ -490,7 +496,7 @@ export const getAiResponse = async (
                 // just omits the source video.
                 const result = await VideoEditProvider.edit({
                     prompt, apiKey, baseUrl: config.baseUrl ?? undefined, modelName: config.modelName ?? undefined,
-                    startImageBase64, endImageBase64, referenceImageBase64, imageMimeType: 'image/jpeg'
+                    startImageBase64, endImageBase64, referenceImageBase64, faceTargetImageBase64, imageMimeType: 'image/jpeg'
                 });
                 if (!result.success) return { content: '', provider: `custom-video:${config.label}`, success: false, error: result.error };
                 const videoUrl = result.videoUrl || buildMediaUrl(storeMediaBase64(result.videoBase64!, 'video/mp4'));

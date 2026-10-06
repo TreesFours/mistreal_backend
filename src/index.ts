@@ -240,7 +240,9 @@ app.get('/api/weather', async (req, res) => {
             weather.planets = astroData.planets.filter((p: any) => p.isVisible).map((p: any) => p.name).join(', ');
             weather.moonImageUrl = astroData.moon.imageUrl;
         }
-    } catch (e) {}
+    } catch (e: any) {
+        console.warn('⚠️ Celestial enrichment on /api/weather failed (weather itself still returned):', e.message);
+    }
 
     res.json(weather);
 });
@@ -369,6 +371,23 @@ app.get('/api/config', async (req, res) => {
         freeTrialDays: process.env.FREE_TRIAL_DAYS || "7",
         freePlatformLimit: parseInt(process.env.FREE_USER_PLATFORM_LIMIT || '1', 10)
     });
+});
+
+// 🏦 Bank official-channel directory — deep-links into a bank's own
+// WhatsApp/Facebook chat only; this app never touches payments or credentials.
+app.get('/api/banks/channels', async (req, res) => {
+    try {
+        const { country, deviceId } = req.query;
+        let countryCode = country ? String(country) : undefined;
+        if (!countryCode && deviceId) {
+            const user = await User.findOne({ where: { deviceId: String(deviceId) } });
+            countryCode = user?.lastKnownCountry || undefined;
+        }
+        const { getBankChannels } = require('./services/bankChannelRegistry');
+        res.json({ success: true, banks: getBankChannels(countryCode) });
+    } catch (e: any) {
+        res.status(200).json({ success: false, banks: [], error: e.message });
+    }
 });
 
 // 🛰️ Celestial Precision Vectors

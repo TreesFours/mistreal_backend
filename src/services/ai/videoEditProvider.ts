@@ -14,6 +14,7 @@ export interface VideoEditRequest {
     startImageBase64?: string;
     endImageBase64?: string;
     referenceImageBase64?: string;
+    faceTargetImageBase64?: string;
     imageMimeType?: string;
     apiKey: string;
     baseUrl?: string;
@@ -53,6 +54,7 @@ export const VideoEditProvider = {
             if (req.startImageBase64) body.startImage = { data: req.startImageBase64, mimeType: req.imageMimeType };
             if (req.endImageBase64) body.endImage = { data: req.endImageBase64, mimeType: req.imageMimeType };
             if (req.referenceImageBase64) body.referenceImage = { data: req.referenceImageBase64, mimeType: req.imageMimeType };
+            if (req.faceTargetImageBase64) body.faceTargetImage = { data: req.faceTargetImageBase64, mimeType: req.imageMimeType };
             const response = await axios.post(
                 req.baseUrl,
                 body,
