@@ -186,10 +186,14 @@ export const getJplObserverData = async (bodyId: string, lat: number, lon: numbe
             '10': 'Sun',
             '199': 'Mercury',
             '299': 'Venus',
+            '399': 'Earth',
             '301': 'Moon',
             '499': 'Mars',
             '599': 'Jupiter',
-            '699': 'Saturn'
+            '699': 'Saturn',
+            '799': 'Uranus',
+            '899': 'Neptune',
+            '999': 'Pluto'
         };
         const celestialName = bodyNames[bodyId] || `Celestial Body ${bodyId}`;
 
@@ -203,7 +207,8 @@ export const getJplObserverData = async (bodyId: string, lat: number, lon: numbe
             distSun: distSun !== "N/A" && !distSun.includes('AU') ? `${distSun} AU` : distSun,
             description: description || `${celestialName} ephemeris tracked via JPL Horizons vector coordinate system.`,
             relativeToMoon,
-            status: elevation > 0 ? "Visible" : "Below Horizon"
+            status: elevation > 0 ? "Visible" : "Below Horizon",
+            simulated: false
         };
     } catch (e: any) {
         logger.error(`❌ JPL Observer Failure for body ${bodyId}: ${e.message}`);
@@ -213,10 +218,14 @@ export const getJplObserverData = async (bodyId: string, lat: number, lon: numbe
             '10': 'Sun',
             '199': 'Mercury',
             '299': 'Venus',
+            '399': 'Earth',
             '301': 'Moon',
             '499': 'Mars',
             '599': 'Jupiter',
-            '699': 'Saturn'
+            '699': 'Saturn',
+            '799': 'Uranus',
+            '899': 'Neptune',
+            '999': 'Pluto'
         };
         const celestialName = bodyNames[bodyId] || `Celestial Body ${bodyId}`;
         const isDaytime = bodyId === '10';
@@ -229,9 +238,10 @@ export const getJplObserverData = async (bodyId: string, lat: number, lon: numbe
             orientation: 'SE',
             distEarth: '1.00 AU',
             distSun: '1.00 AU',
-            description: `${celestialName} synchronized via backup orbital calculation model.`,
+            description: `${celestialName}: JPL Horizons is unreachable right now — showing a placeholder position, not a real reading.`,
             relativeToMoon: 'Aligned with local observer horizon',
-            status: isDaytime || Number(bodyId) > 200 ? 'Visible' : 'Below Horizon'
+            status: isDaytime || Number(bodyId) > 200 ? 'Visible' : 'Below Horizon',
+            simulated: true
         };
     }
 };

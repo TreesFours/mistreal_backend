@@ -8,6 +8,26 @@ import { User, SocialEvent, DelayedAction, sequelize } from '../models/userModel
 import { getAiResponse } from './aiService';
 import { normalizePlatformId, isPlatformMatching, isContactAutoReplyEnabled } from './socialService';
 
+// The event types below are registered with Zernio on startup (see
+// ZernioAdapter.ensureWebhookRegistered in index.ts) — kept in this file so
+// the registered list and the switch statement that actually handles them
+// stay next to each other. Only confirmed-real event names from Zernio's
+// OpenAPI spec are listed here; a few extra aliases the switch below also
+// accepts (e.g. 'message.created', 'call.incoming') aren't registered since
+// they weren't confirmed in the real catalog — harmless if never received.
+export const ZERNIO_SUBSCRIBED_EVENTS = [
+    'post.scheduled', 'post.published', 'post.failed', 'post.partial', 'post.cancelled',
+    'post.platform.published', 'post.platform.failed',
+    'account.connected', 'account.disconnected',
+    'message.received', 'message.sent', 'message.edited', 'message.deleted',
+    'message.delivered', 'message.read', 'message.failed',
+    'conversation.started', 'reaction.received',
+    'comment.received', 'review.new', 'review.updated', 'lead.received',
+    'call.received', 'call.ended', 'call.failed',
+    'whatsapp.template.status_updated',
+    'verification.approved', 'verification.failed'
+];
+
 export class WebhookService {
 // ... (rest of the imports/class structure)
     private static readonly SECRET = process.env.ZERNIO_WEBHOOK_SECRET;
@@ -120,8 +140,28 @@ export class WebhookService {
                 case 'call.failed':
                     await this.handleCallFailed(user, data, platform, transaction);
                     break;
-                case 'whatsapp.template.status':
+                // Confirmed real event name (via Zernio's OpenAPI spec) is
+                // whatsapp.template.status_updated — the old 'whatsapp.template.status'
+                // case never matched anything Zernio actually sends.
+                case 'whatsapp.template.status_updated':
                     await this.handleWhatsAppTemplateUpdate(user, data, transaction);
+                    break;
+                case 'post.scheduled':
+                case 'post.cancelled':
+                case 'post.partial':
+                case 'post.platform.published':
+                case 'post.platform.failed':
+                    await this.handlePostStatusEvent(user, type, data, platform, transaction);
+                    break;
+                case 'conversation.started':
+                    await this.handleConversationStarted(user, data, platform, transaction);
+                    break;
+                case 'review.new':
+                case 'review.updated':
+                    await this.handleReviewEvent(user, type, data, platform, transaction);
+                    break;
+                case 'lead.received':
+                    await this.handleLeadReceived(user, data, platform, transaction);
                     break;
                 case 'whatsapp.number.activated':
                 case 'whatsapp.number.disconnected':
@@ -184,12 +224,18 @@ export class WebhookService {
         }
 
         // 💾 PERSISTENCE: Save to SocialEvent table for feed and history
+        // senderId must be the Zernio CONVERSATION id, not the raw contact id —
+        // getPlatformContacts() surfaces this as contact.id, which the app sends
+        // straight back as targetId to POST /inbox/conversations/{targetId}/messages
+        // when replying (see zernioAdapter.ts::sendAction). Using the contact id
+        // here would make every reply to a live-arrived DM fail against Zernio's
+        // real API with the wrong resource id.
         await SocialEvent.create({
             deviceId: user.deviceId,
             platform: platform.toLowerCase(),
             type: 'message',
             externalId: data.message_id || data.id || `msg_${Date.now()}`,
-            senderId: data.sender?.id,
+            senderId: data.conversationId || data.sender?.id,
             senderName: sender,
             content: data.content?.text || data.text || "",
             metadata: {
@@ -484,6 +530,70 @@ export class WebhookService {
             type: 'whatsapp_number_event',
             event: eventType,
             data,
+            timestamp: new Date().toISOString()
+        });
+        user.set('preferences', { ...user.preferences, unreadMetadata });
+        user.changed('preferences', true);
+        await user.save({ transaction });
+    }
+
+    private static async handlePostStatusEvent(user: any, eventType: string, data: any, platform: string, transaction: any) {
+        logger.info(`📋 [${platform}] Post status event ${eventType}: ${data?.post_id || data?.id}`);
+        const unreadMetadata = { ...(user.preferences?.unreadMetadata || {}) };
+        unreadMetadata['system_alerts'] = unreadMetadata['system_alerts'] || [];
+        unreadMetadata['system_alerts'].push({
+            type: 'post_status',
+            event: eventType,
+            platform: platform || 'social',
+            postId: data?.post_id || data?.id,
+            error: data?.error,
+            timestamp: new Date().toISOString()
+        });
+        user.set('preferences', { ...user.preferences, unreadMetadata });
+        user.changed('preferences', true);
+        await user.save({ transaction });
+    }
+
+    private static async handleConversationStarted(user: any, data: any, platform: string, transaction: any) {
+        logger.info(`💬 [${platform}] New conversation started with ${data?.contactId || 'a contact'}`);
+        const unreadMetadata = { ...(user.preferences?.unreadMetadata || {}) };
+        unreadMetadata['system_alerts'] = unreadMetadata['system_alerts'] || [];
+        unreadMetadata['system_alerts'].push({
+            type: 'conversation_started',
+            platform: platform || 'social',
+            contactId: data?.contactId,
+            timestamp: new Date().toISOString()
+        });
+        user.set('preferences', { ...user.preferences, unreadMetadata });
+        user.changed('preferences', true);
+        await user.save({ transaction });
+    }
+
+    private static async handleReviewEvent(user: any, eventType: string, data: any, platform: string, transaction: any) {
+        logger.info(`⭐ [${platform}] ${eventType}: ${data?.rating ?? 'n/a'} stars`);
+        await SocialEvent.create({
+            deviceId: user.deviceId,
+            platform: (platform || 'social').toLowerCase(),
+            type: 'review',
+            externalId: data?.review_id || data?.id || `review_${Date.now()}`,
+            senderId: data?.author?.id,
+            senderName: data?.author?.name || 'Reviewer',
+            content: data?.text || '',
+            metadata: { rating: data?.rating, event: eventType },
+            timestamp: new Date(),
+            isRead: false
+        }, { transaction });
+    }
+
+    private static async handleLeadReceived(user: any, data: any, platform: string, transaction: any) {
+        logger.info(`🧲 [${platform}] New lead received: ${data?.name || data?.id}`);
+        const unreadMetadata = { ...(user.preferences?.unreadMetadata || {}) };
+        unreadMetadata['system_alerts'] = unreadMetadata['system_alerts'] || [];
+        unreadMetadata['system_alerts'].push({
+            type: 'lead_received',
+            platform: platform || 'social',
+            name: data?.name,
+            contact: data?.email || data?.phone,
             timestamp: new Date().toISOString()
         });
         user.set('preferences', { ...user.preferences, unreadMetadata });

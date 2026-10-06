@@ -101,9 +101,14 @@ export class IntelligenceService {
 
     /**
      * Updates a specific intelligence category buffer.
-     * Capped at 15 items. Newest first.
+     * Capped at 15 items, newest first, AND age-pruned — previously only the
+     * count cap bounded this (an item could sit for weeks if 15 never filled
+     * up). maxAgeDays defaults to 1 for fast-moving categories (news/astro/
+     * journals); slow-refreshing categories (wiki ~4-day cycle, novels
+     * ~2-week cycle) pass a wider window so items aren't pruned before their
+     * own next refresh ever arrives.
      */
-    private static async updateBuffer(category: string, newItems: any[]) {
+    private static async updateBuffer(category: string, newItems: any[], maxAgeDays: number = 1) {
         try {
             const [buffer] = await IntelligenceBuffer.findOrCreate({
                 where: { category },
@@ -111,22 +116,27 @@ export class IntelligenceService {
             });
 
             const currentItems = buffer.items || [];
+            const cutoff = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000;
+            const freshItems = currentItems.filter((item: any) => {
+                const t = new Date(item.timestamp).getTime();
+                return !isNaN(t) && t >= cutoff;
+            });
 
             // Add new items, filtering out duplicates by title
             const uniqueNewItems = newItems.filter((newItem: any) =>
-                !currentItems.some((existing: any) => existing.title === newItem.title)
+                !freshItems.some((existing: any) => existing.title === newItem.title)
             );
 
-            if (uniqueNewItems.length === 0) return;
+            if (uniqueNewItems.length === 0 && freshItems.length === currentItems.length) return;
 
             // Prepend new items and truncate to 15
-            const updatedItems = [...uniqueNewItems, ...currentItems].slice(0, 15);
+            const updatedItems = [...uniqueNewItems, ...freshItems].slice(0, 15);
 
             buffer.items = updatedItems;
             buffer.lastUpdated = new Date();
             await buffer.save();
 
-            logger.info(`🔄 [Intel] Buffer updated: ${category} (+${uniqueNewItems.length} items)`);
+            logger.info(`🔄 [Intel] Buffer updated: ${category} (+${uniqueNewItems.length} items, -${currentItems.length - freshItems.length} stale)`);
         } catch (e: any) {
             logger.error(`❌ Buffer Update Error (${category}): ${e.message}`);
         }
@@ -329,10 +339,13 @@ export class IntelligenceService {
                 defaults: { category: 'wiki', items: [] }
             });
 
-            const lastUpdated = new Date(buffer.lastUpdated).getTime();
-            const fourDaysMs = 4 * 24 * 60 * 60 * 1000;
+            // Calendar-day boundary (not a rolling N-day window) so exactly one
+            // new article appears per day, instead of under-delivering on a
+            // raw "4 days since last refresh" timer.
+            const lastUpdatedDate = new Date(buffer.lastUpdated).toDateString();
+            const todayDate = new Date().toDateString();
 
-            if (Date.now() - lastUpdated < fourDaysMs && (buffer.items || []).length >= 1) return;
+            if (lastUpdatedDate === todayDate && (buffer.items || []).length >= 1) return;
 
             const response = await axios.get('https://en.wikipedia.org/api/rest_v1/page/random/summary');
             const article = [{
@@ -342,7 +355,7 @@ export class IntelligenceService {
                 source: 'Wikipedia',
                 timestamp: new Date().toISOString()
             }];
-            await this.updateBuffer('wiki', article);
+            await this.updateBuffer('wiki', article, 5); // keep a few days of history even though it refreshes daily
         } catch (e) {}
     }
 
@@ -382,7 +395,7 @@ export class IntelligenceService {
                 source: 'OpenLibrary',
                 timestamp: new Date().toISOString()
             }));
-            await this.updateBuffer('novels', novels);
+            await this.updateBuffer('novels', novels, 16); // wider than its own 2-week refresh cycle
         } catch (e) {}
     }
 

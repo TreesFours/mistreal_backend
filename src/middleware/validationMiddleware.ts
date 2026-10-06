@@ -49,6 +49,7 @@ export const socialActionSchema = z.object({
         targetId: z.string().optional(),
         mediaBase64: z.string().optional(),
         mediaMimeType: z.string().optional(),
+        shareToCommunity: z.boolean().optional(),
     })
 });
 

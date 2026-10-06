@@ -27,10 +27,20 @@ import { PinnedIntel } from './models/PinnedIntel';
 import { SocialToken } from './models/SocialToken';
 import { EmailMessage } from './models/EmailMessage'; // imported for Sequelize registration — table is created by sequelize.sync below
 import { AiProviderConfig } from './models/AiProviderConfig'; // same — registration only
+import { Business } from './models/businessModel'; // same — registration only
+import { Ad, AdEvent } from './models/adModel'; // same — registration only
+import { CommunityPost } from './models/communityModel'; // same — registration only
+import { CachedYoutubeVideo } from './models/youtubeVideoModel'; // same — registration only
+import { refreshCuratedVideos, getCachedVideos } from './services/youtubeService';
 import { sequelize } from './db';
 import { verifyPurchase } from './services/googlePlayService';
 import socialRoutes from './routes/socialRoutes';
 import webhookRoutes from './routes/webhookRoutes';
+import businessRoutes from './routes/businessRoutes';
+import adRoutes from './routes/adRoutes';
+import { ZernioAdapter } from './services/socialPlatforms/zernioAdapter';
+import { getLocationPhoto } from './services/locationPhotoService';
+import { ZERNIO_SUBSCRIBED_EVENTS } from './services/webhookService';
 import userRoutes from './routes/userRoutes';
 import { validate, chatSchema, socialActionSchema, userSettingsSchema } from './middleware/validationMiddleware';
 import { getOrCreateUserInternal } from './utils/userResolver';
@@ -85,6 +95,8 @@ app.use('/api/user', userRoutes); // Combined /api/user/settings and /api/user/p
 app.use('/api/ai-provider', aiProviderRoutes);
 app.use('/api/emergency', emergencyRoutes);
 app.use('/api/email', emailRoutes);
+app.use('/api/business', businessRoutes);
+app.use('/api/ads', adRoutes);
 
 app.get('/', (req, res) => res.send('🚀 Mistreal Backend Running'));
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date() }));
@@ -263,6 +275,32 @@ app.post('/api/intel/unpin', async (req, res) => {
     }
 });
 
+// 🎬 Curated YouTube videos — served from the cache populated by
+// refreshCuratedVideos(), never a live per-request search (see youtubeService.ts).
+app.get('/api/feed/youtube', async (req, res) => {
+    try {
+        const videos = await getCachedVideos();
+        res.json({ success: true, videos });
+    } catch (e: any) {
+        res.status(200).json({ success: false, videos: [], error: e.message });
+    }
+});
+
+// 📷 Location photo — best-effort, returns null (not an error) if no photo
+// API key is configured or no match is found; see locationPhotoService.ts.
+app.get('/api/intel/location-photo', async (req, res) => {
+    const { label, lat, lon } = req.query;
+    if (!label || lat === undefined || lon === undefined) {
+        return res.status(200).json({ success: false, photoUrl: null, error: 'label, lat and lon are required' });
+    }
+    try {
+        const photoUrl = await getLocationPhoto(String(label), Number(lat), Number(lon));
+        res.json({ success: true, photoUrl });
+    } catch (e: any) {
+        res.status(200).json({ success: false, photoUrl: null, error: e.message });
+    }
+});
+
 // 🔎 Nearby Discovery (real OSM points of interest, radius-aware)
 app.get('/api/discovery/nearby', async (req, res) => {
     const { lat, lon, radius, category } = req.query;
@@ -378,6 +416,19 @@ setInterval(async () => {
     }
 }, 10 * 60 * 1000); // Every 10 mins
 
+// YouTube's public Data API never gives a direct streamable video URL
+// (that would violate their ToS) — this cache just feeds thumbnails/metadata
+// into the feed; actual playback happens client-side via the official embed
+// player. Long interval to stay well under the ~10,000-unit/day quota given
+// search.list costs 100 units per curated query.
+setInterval(async () => {
+    try {
+        await refreshCuratedVideos();
+    } catch (e) {
+        console.error('❌ YouTube Cache Worker Error:', e);
+    }
+}, 8 * 60 * 60 * 1000); // Every 8 hours
+
 // ⏳ Background Worker: Delayed Social Actions
 setInterval(async () => {
     if (!DATABASE_URL) return;
@@ -405,9 +456,20 @@ initDb().then(async () => {
     try {
         console.log('🚀 Triggering Intelligence Bootstrap...');
         await IntelligenceService.refreshGlobalIntel().catch(e => console.error('Intel Buffer Error:', e.message));
+        refreshCuratedVideos().catch(e => console.error('YouTube Cache Bootstrap Error:', e.message)); // fire-and-forget, don't block boot
         console.log('✅ Intelligence Engine Bootstrapped');
     } catch (e: any) {
         console.error('⚠️ Intel Bootstrap failed:', e.message);
+    }
+
+    // Fire-and-forget: the webhook receiver (webhookRoutes.ts) has existed
+    // for a while, but nothing ever told Zernio to actually send events to
+    // it. Registration failure must never block server startup — same
+    // fail-safe rule as everything else gated by an optional API key.
+    if (process.env.ZERNIO_API_KEY) {
+        ZernioAdapter.ensureWebhookRegistered(ZERNIO_SUBSCRIBED_EVENTS).catch(e =>
+            console.error('⚠️ Zernio webhook registration failed at boot:', e.message)
+        );
     }
 
     app.listen(port, () => { console.log(`🚀 Server Running on Port ${port}`); });

@@ -1,4 +1,6 @@
 import { User, SocialEvent } from '../models/userModel';
+import { CommunityPost } from '../models/communityModel';
+import { Op } from 'sequelize';
 import { getPlatformDefinition, getAvailablePlatformDefinitions } from './socialPlatforms/platformRegistry';
 import { ZernioAdapter } from './socialPlatforms/zernioAdapter';
 import { FacebookOAuth, LinkedInOAuth } from './socialPlatforms/socialAuthHandlers';
@@ -70,14 +72,11 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
                     syncWarnings.push(`Zernio returned zero items for profile ${user.zernioProfileId} — either the connected account(s) have no content yet, or Zernio isn't returning data for ${unhydrated.join(', ')} (some platforms, e.g. LinkedIn, restrict third-party read access by policy).`);
                 }
 
-                // Raw Zernio items arrive in Zernio's own field shape, not the
-                // {_id, platform, author:{id,name}, content:{text,attachments}, ...}
-                // shape the rest of this function (and posts.map below) assumes —
-                // without normalizing here, a fresh hydration would silently render
-                // blank author/text/image fields even though Zernio has real data.
-                // Exact Zernio field names are UNVERIFIED against a live account;
-                // these fallbacks cover the common aliases seen across social APIs —
-                // adjust here first if real payloads use different keys.
+                // ZernioAdapter.fetchInbox/fetchFeed already return items pre-shaped
+                // as {_id, platform, author:{id,name}, content:{text,attachments}, ...}
+                // (confirmed against Zernio's real OpenAPI spec) — this pass is a
+                // defensive second layer, not the primary mapping, in case a future
+                // Zernio API change slips an unnormalized item through.
                 const normalizedRemoteItems: any[] = [];
                 for (const it of allRemoteItems) {
                     try {
@@ -130,9 +129,42 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
             syncWarnings.push(`${unhydrated.join(', ')} connected but no Zernio profile is linked — sync can't run. Try reconnecting.`);
         }
 
-        const filteredItems = isPro ? items : items.filter((i: any) =>
+        const filteredItems: any[] = isPro ? items : items.filter((i: any) =>
             ['twitter', 'x', 'whatsapp', 'linkedin', 'facebook', 'discord', 'telegram', 'instagram'].includes((i.platform || '').toLowerCase())
         );
+
+        // Community Feed: other app users' posts, filtered to only the
+        // platforms this viewer has explicitly opted into. Empty by default —
+        // the feature is fully off until the viewer picks at least one
+        // platform in Settings. Never includes the viewer's own posts (those
+        // are already in `items` above) or anything not opted in as public.
+        const communityPlatforms: string[] = user.preferences?.communityFeedPlatforms || [];
+        if (communityPlatforms.length > 0) {
+            try {
+                const communityPosts = await CommunityPost.findAll({
+                    where: {
+                        visibility: 'public_app',
+                        authorDeviceId: { [Op.ne]: user.deviceId },
+                        platform: { [Op.in]: communityPlatforms.map((p: string) => normalizePlatformId(p)) }
+                    },
+                    order: [['createdAt', 'DESC']],
+                    limit: 30
+                });
+                for (const cp of communityPosts) {
+                    filteredItems.push({
+                        _id: `community_${cp.id}`,
+                        platform: cp.platform,
+                        author: { id: cp.authorDeviceId, name: cp.authorDisplayName },
+                        content: { text: cp.content, attachments: cp.imageUrl ? [{ url: cp.imageUrl, type: 'image' }] : [] },
+                        createdAt: (cp as any).createdAt,
+                        metadata: { isCommunityPost: true },
+                        type: 'post'
+                    });
+                }
+            } catch (e: any) {
+                logger.warn(`⚠️ Community Feed fetch failed: ${e.message}`);
+            }
+        }
 
         const platformUpdates = filteredItems.reduce((acc: any[], item: any) => {
             const existing = acc.find((p: any) => p.platform === item.platform);
@@ -157,6 +189,11 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
         // "skip this one post", not blank out the entire feed via the outer catch.
         const posts: any[] = [];
         for (const it of filteredItems) {
+            // The Posts feed must only ever show posts, not DM messages — the
+            // top-level query above intentionally pulls both types together
+            // (it also drives per-platform hydration bookkeeping for DM-only
+            // platforms), so the split has to happen here instead.
+            if (it.type === 'message') continue;
             try {
                 const def = getPlatformDefinition(it.platform);
 
@@ -166,12 +203,10 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
                 const imageUrl = attachments.find((a: any) => a?.type === 'image')?.url || null;
                 const videoUrl = attachments.find((a: any) => a?.type === 'video')?.url || null;
 
-                // Resolve the real content kind. Zernio's raw items don't consistently
-                // flag stories/reels, so check both a dedicated `type` and metadata hints
-                // before falling back to a generic "post".
-                const isStory = it.type === 'story' || it.metadata?.is_story === true || it.metadata?.media_product_type === 'STORY';
-                const isReel = !isStory && (it.type === 'reel' || it.metadata?.is_reel === true || it.metadata?.media_product_type === 'REELS' || (videoUrl && it.metadata?.media_type === 'VIDEO'));
-                const resolvedType = isStory ? 'story' : isReel ? 'reel' : (it.type || 'post');
+                // Confirmed against Zernio's real Post schema: no story/reel
+                // marker exists at all, so there's nothing to detect here —
+                // this used to guess at metadata fields Zernio never sends.
+                const resolvedType = it.type || 'post';
 
                 posts.push({
                     id: it._id || it.id,
@@ -182,13 +217,17 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
                     type: resolvedType,
                     imageUrl: imageUrl,
                     videoUrl: videoUrl,
-                    sourceUrl: it.source_url || it.url || null,
+                    sourceUrl: it.metadata?.sourceUrl || it.source_url || it.url || null,
                     platformIcon: def?.icon || '🔗',
                     platformColor: def?.color || '#888',
                     platformDisplayName: def?.displayName || it.platform,
+                    // Zernio's real Post schema has no engagement metrics (no
+                    // likes/comments count) — these stay honestly at 0 rather
+                    // than showing fabricated numbers.
                     commentsCount: it.metadata?.comments_count || 0,
                     likes: it.metadata?.likes_count || 0,
-                    comments: it.metadata?.comments || []
+                    comments: it.metadata?.comments || [],
+                    isCommunityPost: it.metadata?.isCommunityPost === true
                 });
             } catch (itemError: any) {
                 console.error(`[SYNC] Skipping one post that failed to render: ${itemError.message}`, it);
@@ -348,7 +387,9 @@ export const disconnectPlatform = async (deviceId: string, platform: string) => 
                 const accounts = await ZernioAdapter.fetchAccounts(user.zernioProfileId);
                 const targetAccount = accounts.find((a: any) => isPlatformMatching(a.platform || a.type || '', normPlatform));
                 if (targetAccount) {
-                    const accountId = targetAccount._id || targetAccount.id || targetAccount.accountId;
+                    // Confirmed real Account schema field is `id` (Zernio's OpenAPI
+                    // spec) — the others are defensive fallbacks, not the primary.
+                    const accountId = targetAccount.id || targetAccount.accountId || targetAccount._id;
                     await ZernioAdapter.deleteAccount(user.zernioProfileId, accountId);
                     logger.info(`✅ Unlinked ${normPlatform} account ${accountId} on Zernio.`);
                 }
@@ -392,9 +433,42 @@ export const reconcileUserPlatforms = async (user: User): Promise<string[]> => {
     }
 };
 
-export const sendSocialAction = async (user: User, action: { platform: string, type: string, content: string, targetId?: string, mediaUrl?: string }) => {
+// Mirrors ZernioAdapter.sendAction's own branching — everything NOT in this
+// list falls through to its default "publish a post" case, which is the
+// only kind of action that should ever be eligible to also land in the
+// shared Community Feed (never a like, follow, DM, or comment).
+const isPublishAction = (type: string): boolean => {
+    const lower = type.toLowerCase();
+    return !['like', 'unlike', 'follow', 'unfollow', 'comment'].includes(lower) && type !== 'Direct Message';
+};
+
+export const sendSocialAction = async (
+    user: User,
+    action: { platform: string, type: string, content: string, targetId?: string, mediaUrl?: string, shareToCommunity?: boolean }
+) => {
     if (!user.zernioProfileId) throw new Error('Connect your social profile first.');
-    return await ZernioAdapter.sendAction(user.zernioProfileId, action.platform, action.content, action.type, action.targetId, action.mediaUrl);
+    const result = await ZernioAdapter.sendAction(user.zernioProfileId, action.platform, action.content, action.type, action.targetId, action.mediaUrl);
+
+    // Opt-in, per-post, never retroactive — the author explicitly chose this
+    // at send time. A failure here must never surface as a failed post send.
+    if (action.shareToCommunity === true && isPublishAction(action.type)) {
+        try {
+            await CommunityPost.create({
+                authorDeviceId: user.deviceId,
+                authorDisplayName: user.userName || 'A Mistreal user',
+                platform: normalizePlatformId(action.platform),
+                content: action.content,
+                imageUrl: action.mediaUrl || null,
+                videoUrl: null,
+                sourceUrl: null,
+                visibility: 'public_app'
+            });
+        } catch (e: any) {
+            logger.warn(`⚠️ Community Feed share failed (post itself still succeeded): ${e.message}`);
+        }
+    }
+
+    return result;
 };
 
 /**
@@ -453,6 +527,34 @@ export const getPlatformContacts = async (user: User, platform: string, search?:
         if (search && search.trim().length > 0) {
             const query = search.toLowerCase();
             contactsList = contactsList.filter(c => c.name.toLowerCase().includes(query));
+
+            // A real search query hits Zernio's live platform search (finds anyone
+            // on the platform, not just people with existing local DM history) —
+            // the old code only ever filtered the local list and silently dropped
+            // the query on the Zernio fallback below, so searches always came up
+            // empty for anyone not already in the user's DM history.
+            if (user.zernioProfileId) {
+                const existingIds = new Set(contactsList.map(c => c.id));
+                const zernioResults = await ZernioAdapter.searchPlatform(user.zernioProfileId, platform, search.trim());
+                for (const c of zernioResults) {
+                    const id = c.id || c._id;
+                    if (id && !existingIds.has(id)) {
+                        existingIds.add(id);
+                        contactsList.push({
+                            id,
+                            name: c.name || c.username || 'Social Contact',
+                            platform: platform.toLowerCase(),
+                            unreadCount: 0,
+                            isOnline: false,
+                            lastSeen: 'Unknown',
+                            statusMessage: 'Zernio Contact',
+                            avatar: c.avatar || null,
+                            autoReplyEnabled: isContactAutoReplyEnabled(user, platform, id)
+                        });
+                    }
+                }
+            }
+            return contactsList;
         }
 
         if (contactsList.length === 0 && user.zernioProfileId) {

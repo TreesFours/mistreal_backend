@@ -276,7 +276,7 @@ router.post('/action', authenticateUser, validate(socialActionSchema), async (re
     try {
         const user = await getResolvedUser(req);
         if (!user) return res.status(404).json({ error: 'User not found' });
-        const { platform, type, content, targetId, mediaBase64, mediaMimeType } = req.body;
+        const { platform, type, content, targetId, mediaBase64, mediaMimeType, shareToCommunity } = req.body;
 
         // AI-generated/edited images only exist as base64 — host it briefly on our
         // own backend so Zernio has a real URL to fetch (see mediaStore.ts).
@@ -286,9 +286,31 @@ router.post('/action', authenticateUser, validate(socialActionSchema), async (re
             mediaUrl = buildMediaUrl(id);
         }
 
-        const result = await sendSocialAction(user, { platform, type, content, targetId, mediaUrl });
+        const result = await sendSocialAction(user, { platform, type, content, targetId, mediaUrl, shareToCommunity });
         res.json(result);
     } catch (error: any) { res.status(500).json({ error: error.message }); }
+});
+
+// Which platforms' Community Feed content this viewer wants to see —
+// empty by default, so the feature stays fully off until explicitly opted
+// into per platform.
+router.patch('/community-preferences', async (req: Request, res: Response) => {
+    try {
+        const { platforms } = req.body;
+        if (!Array.isArray(platforms)) {
+            return res.status(200).json({ success: false, error: 'a platforms array is required' });
+        }
+        const user = await getResolvedUser(req);
+        if (!user) return res.status(200).json({ success: false, error: 'User resolve failed' });
+
+        user.set('preferences', { ...user.preferences, communityFeedPlatforms: platforms });
+        user.changed('preferences', true);
+        await user.save();
+
+        res.json({ success: true, platforms });
+    } catch (error: any) {
+        res.status(200).json({ success: false, error: error.message });
+    }
 });
 
 router.post('/webhook', async (req: Request, res: Response) => {
