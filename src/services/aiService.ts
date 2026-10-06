@@ -25,7 +25,12 @@ export interface AiResponse {
 }
 
 export const IMAGE_GEN_MODEL_ID = 'imagen-3.0-generate-002';
-export const VIDEO_GEN_MODEL_ID = 'veo-2.0-generate-001';
+// Veo 3.1 (not 2.0) is what actually supports first/last-frame keyframe
+// conditioning on this same Gemini API surface — confirmed against
+// ai.google.dev: instances[0].image / instances[0].lastFrame, each
+// {inlineData:{mimeType,data}}. Veo 3.1 Lite does NOT support this, so this
+// must stay on full 3.1 or 3.1 Fast.
+export const VIDEO_GEN_MODEL_ID = 'veo-3.1-generate-preview';
 export const IMAGE_EDIT_MODEL_ID = 'gemini-2.5-flash-image';
 export const VIDEO_EDIT_PROVIDER_ID = 'byok-video-edit';
 
@@ -322,15 +327,19 @@ const generateImage = async (prompt: string, apiKey: string): Promise<AiResponse
  * confirm IMAGE_EDIT_MODEL_ID is still correct against a live account before
  * relying on this; Google renames/versions these relatively often.
  */
-const editImage = async (prompt: string, imageBase64: string, mimeType: string, apiKey: string): Promise<AiResponse> => {
+const editImage = async (prompt: string, imageDatas: string[], mimeType: string, apiKey: string): Promise<AiResponse> => {
     try {
         const response = await axios.post(
             `${GOOGLE_AI_BASE_URL}/models/${IMAGE_EDIT_MODEL_ID}:generateContent?key=${apiKey}`,
             {
                 contents: [{
+                    // Gemini's generateContent accepts several inline_data image
+                    // parts in one request — this is what lets a character
+                    // reference image (or any extra attached image) actually
+                    // influence the edit, instead of only ever seeing imageDatas[0].
                     parts: [
                         { text: prompt },
-                        { inline_data: { mime_type: mimeType, data: imageBase64 } }
+                        ...imageDatas.map(data => ({ inline_data: { mime_type: mimeType, data } }))
                     ]
                 }],
                 generationConfig: { responseModalities: ['IMAGE'] }
@@ -368,11 +377,19 @@ const editImage = async (prompt: string, imageBase64: string, mimeType: string, 
  * API key yet — confirm/adjust field names against a live account before
  * relying on this in production.
  */
-const generateVideo = async (prompt: string, apiKey: string): Promise<AiResponse> => {
+const generateVideo = async (
+    prompt: string, apiKey: string, startImageBase64?: string, endImageBase64?: string
+): Promise<AiResponse> => {
     try {
+        const instance: any = { prompt };
+        // Same mime-type convention as editImage/GeminiProvider.chat — imageDatas
+        // doesn't carry its original mime type through the pipeline.
+        if (startImageBase64) instance.image = { inlineData: { mimeType: 'image/jpeg', data: startImageBase64 } };
+        if (endImageBase64) instance.lastFrame = { inlineData: { mimeType: 'image/jpeg', data: endImageBase64 } };
+
         const startResponse = await axios.post(
             `${GOOGLE_AI_BASE_URL}/models/${VIDEO_GEN_MODEL_ID}:predictLongRunning?key=${apiKey}`,
-            { instances: [{ prompt }], parameters: { sampleCount: 1 } }
+            { instances: [instance], parameters: { sampleCount: 1 } }
         );
         const operationName = startResponse.data?.name;
         if (!operationName) {
@@ -404,8 +421,19 @@ const generateVideo = async (prompt: string, apiKey: string): Promise<AiResponse
 /**
  * 🛡️ UNIVERSAL AI EXECUTION (With Smart Failover)
  */
-export const getAiResponse = async (prompt: string, provider: string, history: any[], user?: any, imageDatas?: string[], audioData?: string, videoData?: { base64: string, mimeType: string }): Promise<AiResponse> => {
+export const getAiResponse = async (
+    prompt: string, provider: string, history: any[], user?: any, imageDatas?: string[],
+    audioData?: string, videoData?: { base64: string, mimeType: string }, imageRoles?: string[]
+): Promise<AiResponse> => {
     const geminiKeyForGeneration = process.env.GEMINI_API_KEY;
+    // Scene Mode's keyframe images, pulled out by role rather than position —
+    // shared by every video path below (app's own Veo, BYOK video-edit, BYOK
+    // video-gen) since all three can make use of a start/end/reference frame.
+    const roleIndex = (role: string) => imageRoles?.indexOf(role) ?? -1;
+    const startImageBase64 = imageDatas && roleIndex('start') >= 0 ? imageDatas[roleIndex('start')] : undefined;
+    const endImageBase64 = imageDatas && roleIndex('end') >= 0 ? imageDatas[roleIndex('end')] : undefined;
+    const referenceImageBase64 = imageDatas && roleIndex('character') >= 0 ? imageDatas[roleIndex('character')] : undefined;
+
     if (provider === VIDEO_EDIT_PROVIDER_ID) {
         if (!user?.byokVideoEnabled || !user?.byokVideoEncryptedKey) {
             return { content: '', provider, success: false, error: 'No video editing provider configured — add one in Settings.' };
@@ -416,6 +444,7 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
         const apiKey = decrypt(user.byokVideoEncryptedKey);
         const result = await VideoEditProvider.edit({
             prompt, videoBase64: videoData.base64, mimeType: videoData.mimeType, apiKey,
+            startImageBase64, endImageBase64, referenceImageBase64, imageMimeType: 'image/jpeg',
             baseUrl: user.byokVideoBaseUrl, modelName: user.byokVideoModelName
         });
         if (!result.success) {
@@ -459,21 +488,26 @@ export const getAiResponse = async (prompt: string, provider: string, history: a
                 // video-edit adapter's generic shape here since both ultimately
                 // need {prompt[, video]} in and a video out; a pure-generation call
                 // just omits the source video.
-                const result = await VideoEditProvider.edit({ prompt, apiKey, baseUrl: config.baseUrl ?? undefined, modelName: config.modelName ?? undefined });
+                const result = await VideoEditProvider.edit({
+                    prompt, apiKey, baseUrl: config.baseUrl ?? undefined, modelName: config.modelName ?? undefined,
+                    startImageBase64, endImageBase64, referenceImageBase64, imageMimeType: 'image/jpeg'
+                });
                 if (!result.success) return { content: '', provider: `custom-video:${config.label}`, success: false, error: result.error };
                 const videoUrl = result.videoUrl || buildMediaUrl(storeMediaBase64(result.videoBase64!, 'video/mp4'));
                 return { content: '', provider: `custom-video:${config.label}`, success: true, generatedVideoUrl: videoUrl };
             }
         }
         if (!geminiKeyForGeneration) return { content: '', provider, success: false, error: 'Video generation is not configured.' };
-        return generateVideo(prompt, geminiKeyForGeneration);
+        return generateVideo(prompt, geminiKeyForGeneration, startImageBase64, endImageBase64);
     }
     if (provider === IMAGE_EDIT_MODEL_ID) {
         if (!geminiKeyForGeneration) return { content: '', provider, success: false, error: 'Image editing is not configured.' };
         if (!imageDatas || imageDatas.length === 0) return { content: '', provider, success: false, error: 'Attach an image to edit.' };
         // Same mime-type convention as GeminiProvider.chat — imageDatas doesn't
         // carry its original mime type through the pipeline, only validated bytes.
-        return editImage(prompt, imageDatas[0], 'image/jpeg', geminiKeyForGeneration);
+        // All attached images go through (not just imageDatas[0]) so a character
+        // reference image can actually influence the edit.
+        return editImage(prompt, imageDatas, 'image/jpeg', geminiKeyForGeneration);
     }
 
     const geminiKey = process.env.GEMINI_API_KEY;

@@ -247,11 +247,22 @@ export class IntelligenceService {
 
         if (apiKey) {
             try {
+                // This is one shared buffer for every user (see updateBuffer below), so
+                // there's no single "the" user to localize for — real signal, but
+                // necessarily coarse: use whichever active user's device most recently
+                // reported a location, rather than a hardcoded 'us'. NewsAPI only
+                // supports country-level granularity anyway, not city/radius.
+                const mostRecentLocation = await User.findOne({
+                    where: { lastKnownCountry: { [Op.ne]: null } },
+                    order: [['lastLocationUpdate', 'DESC']]
+                });
+                const country = mostRecentLocation?.lastKnownCountry?.toLowerCase() || 'us';
+
                 // Fetch all categories in parallel
                 const results = await Promise.allSettled(
                     categories.map(cat =>
                         axios.get(`https://newsapi.org/v2/top-headlines`, {
-                            params: { category: cat, country: 'us', apiKey },
+                            params: { category: cat, country, apiKey },
                             timeout: 8000
                         })
                     )
@@ -375,6 +386,22 @@ export class IntelligenceService {
         } catch (e) {}
     }
 
+    // Best-effort: prefer a real, readable copy on archive.org (where OpenLibrary
+    // has linked one via an edition's `ocaid`) over the generic OpenLibrary
+    // catalog/metadata page — not every trending work has a digitized full-text
+    // copy, so this silently falls back to the catalog link when none exists.
+    private static async getReadableBookUrl(workKey: string): Promise<string> {
+        const catalogUrl = `https://openlibrary.org${workKey}`;
+        try {
+            const editionsResp = await axios.get(`https://openlibrary.org${workKey}/editions.json`, { timeout: 5000 });
+            const editions = editionsResp.data?.entries || [];
+            const readable = editions.find((e: any) => e.ocaid);
+            return readable ? `https://archive.org/details/${readable.ocaid}` : catalogUrl;
+        } catch (e) {
+            return catalogUrl;
+        }
+    }
+
     private static async refreshLiterature() {
         try {
             const [buffer] = await IntelligenceBuffer.findOrCreate({
@@ -388,13 +415,13 @@ export class IntelligenceService {
             if (Date.now() - lastUpdated < twoWeeksMs && (buffer.items || []).length >= 1) return;
 
             const response = await axios.get('https://openlibrary.org/trending/daily.json');
-            const novels = response.data.works.slice(0, 3).map((w: any) => ({
+            const novels = await Promise.all(response.data.works.slice(0, 3).map(async (w: any) => ({
                 title: `[Novel] ${w.title}`,
                 description: `Author: ${w.author_name?.join(', ') || 'Unknown'}. A trending piece in literature.`,
-                url: `https://openlibrary.org${w.key}`,
+                url: await this.getReadableBookUrl(w.key),
                 source: 'OpenLibrary',
                 timestamp: new Date().toISOString()
-            }));
+            })));
             await this.updateBuffer('novels', novels, 16); // wider than its own 2-week refresh cycle
         } catch (e) {}
     }
@@ -416,6 +443,7 @@ export class IntelligenceService {
                     const weather = await getWeatherData(user.lastKnownLat, user.lastKnownLon);
                     user.lastWeatherSummary = weather.summary;
                     user.lastKnownCity = weather.location;
+                    if (weather.country) user.lastKnownCountry = weather.country;
                     user.lastLocationUpdate = new Date();
                     await user.save();
                 } catch (e) {}

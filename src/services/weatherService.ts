@@ -40,6 +40,7 @@ export const getWeatherData = async (lat: number, lon: number) => {
         return {
             summary: `${weather.weather[0].description.toUpperCase()}. ${Math.round(weather.main.temp)}°C.`,
             location: weather.name || "Tactical Sector",
+            country: weather.sys?.country || null, // ISO 3166-1 alpha-2 — already in OpenWeather's response
             rainExpected: rain > 0 || weather.clouds.all > 70,
             timeToRain: timeToEvent,
             forecast: outlook

@@ -7,6 +7,14 @@ export interface VideoEditRequest {
     // (no source video to edit) — see getAiResponse's VIDEO_GEN_MODEL_ID branch.
     videoBase64?: string;
     mimeType?: string;
+    // Scene Mode's keyframe conditioning — forwarded best-effort for whichever
+    // BYOK provider the user configured; not every provider will honor these
+    // (see the adapter note below), same "convention, not a guarantee" caveat
+    // as the rest of this generic shape.
+    startImageBase64?: string;
+    endImageBase64?: string;
+    referenceImageBase64?: string;
+    imageMimeType?: string;
     apiKey: string;
     baseUrl?: string;
     modelName?: string;
@@ -42,6 +50,9 @@ export const VideoEditProvider = {
                 body.video = req.videoBase64;
                 body.mimeType = req.mimeType;
             }
+            if (req.startImageBase64) body.startImage = { data: req.startImageBase64, mimeType: req.imageMimeType };
+            if (req.endImageBase64) body.endImage = { data: req.endImageBase64, mimeType: req.imageMimeType };
+            if (req.referenceImageBase64) body.referenceImage = { data: req.referenceImageBase64, mimeType: req.imageMimeType };
             const response = await axios.post(
                 req.baseUrl,
                 body,

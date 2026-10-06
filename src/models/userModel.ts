@@ -28,6 +28,7 @@ export class User extends Model {
     public lastKnownLat!: number | null;
     public lastKnownLon!: number | null;
     public lastKnownCity!: string | null;
+    public lastKnownCountry!: string | null; // ISO 3166-1 alpha-2, from weather's response — used to localize news
     public lastWeatherSummary!: string | null;
     public lastLocationUpdate!: Date | null;
 
@@ -96,6 +97,7 @@ User.init({
     lastKnownLat: { type: DataTypes.FLOAT, allowNull: true },
     lastKnownLon: { type: DataTypes.FLOAT, allowNull: true },
     lastKnownCity: { type: DataTypes.STRING, allowNull: true },
+    lastKnownCountry: { type: DataTypes.STRING, allowNull: true },
     lastWeatherSummary: { type: DataTypes.TEXT, allowNull: true },
     lastLocationUpdate: { type: DataTypes.DATE, allowNull: true },
 

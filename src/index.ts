@@ -48,6 +48,9 @@ import { getStoredMedia } from './utils/mediaStore';
 import aiProviderRoutes from './routes/aiProviderRoutes';
 import emergencyRoutes from './routes/emergencyRoutes';
 import emailRoutes from './routes/emailRoutes';
+import marketRoutes from './routes/marketRoutes';
+import { checkAlerts as checkMarketAlerts } from './services/marketDataService';
+import { MarketAlert } from './models/MarketAlert'; // imported for Sequelize registration — table is created by sequelize.sync below
 
 dotenv.config();
 
@@ -97,6 +100,7 @@ app.use('/api/emergency', emergencyRoutes);
 app.use('/api/email', emailRoutes);
 app.use('/api/business', businessRoutes);
 app.use('/api/ads', adRoutes);
+app.use('/api/markets', marketRoutes);
 
 app.get('/', (req, res) => res.send('🚀 Mistreal Backend Running'));
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date() }));
@@ -113,11 +117,17 @@ app.get('/media/:id', (req, res) => {
 
 // 🧠 AI Chat
 app.post('/api/chat', upload.fields([{ name: 'images', maxCount: 5 }, { name: 'audio', maxCount: 1 }, { name: 'video', maxCount: 1 }]), validate(chatSchema), async (req, res) => {
-    let { prompt, provider, history, deviceId, firebaseUid, contextMetadata } = req.body;
+    let { prompt, provider, history, deviceId, firebaseUid, contextMetadata, imageRoles } = req.body;
     const files = req.files as { images?: Express.Multer.File[], audio?: Express.Multer.File[], video?: Express.Multer.File[] };
 
     if (typeof history === 'string') {
         try { history = JSON.parse(history); } catch (e) { history = []; }
+    }
+    // Parallel to files.images, by position — e.g. ["start","end","character"].
+    // Lets Scene Mode's keyframe-conditioned generation know which uploaded
+    // image plays which role without needing a separate named field per role.
+    if (typeof imageRoles === 'string') {
+        try { imageRoles = JSON.parse(imageRoles); } catch (e) { imageRoles = undefined; }
     }
 
     const user = await getOrCreateUserInternal(deviceId, firebaseUid);
@@ -135,7 +145,7 @@ app.post('/api/chat', upload.fields([{ name: 'images', maxCount: 5 }, { name: 'a
         enhancedPrompt = `[CONTEXT: ${contextMetadata}]\n\nUser Question: ${prompt}`;
     }
 
-    const response = await getAiResponse(enhancedPrompt, provider || 'gemini-1.5-flash', history || [], user, imageDatas, audioData, videoData);
+    const response = await getAiResponse(enhancedPrompt, provider || 'gemini-1.5-flash', history || [], user, imageDatas, audioData, videoData, imageRoles);
 
     // 🛡️ AI NOTE: If you overhaul or fix logic here, log it in the "History & Notes" column of the Master Map.
     res.json(response);
@@ -415,6 +425,17 @@ setInterval(async () => {
         console.error('❌ Sports Worker Error:', e);
     }
 }, 10 * 60 * 1000); // Every 10 mins
+
+// Price alerts need checking faster than the hourly news/wiki refresh, but
+// not so fast it blows through Twelve Data's free daily quota — 15 min is a
+// reasonable middle ground for a price-crossing alert (not a scalping tool).
+setInterval(async () => {
+    try {
+        await checkMarketAlerts();
+    } catch (e) {
+        console.error('❌ Market Alert Worker Error:', e);
+    }
+}, 15 * 60 * 1000); // Every 15 mins
 
 // YouTube's public Data API never gives a direct streamable video URL
 // (that would violate their ToS) — this cache just feeds thumbnails/metadata
