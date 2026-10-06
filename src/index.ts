@@ -379,7 +379,7 @@ app.get('/api/celestial/vectors', async (req, res) => {
             ...data
         });
     } else {
-        res.status(500).json({ success: false, error: 'JPL Data unavailable' });
+        res.status(200).json({ success: false, body: String(bodyId), error: 'JPL Data unavailable' });
     }
 });
 
