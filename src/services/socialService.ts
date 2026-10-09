@@ -5,6 +5,7 @@ import { getPlatformDefinition, getAvailablePlatformDefinitions } from './social
 import { ZernioAdapter } from './socialPlatforms/zernioAdapter';
 import { FacebookOAuth, LinkedInOAuth } from './socialPlatforms/socialAuthHandlers';
 import { TwitterOAuth } from './socialPlatforms/twitterAuth';
+import { YoutubeNativeAuth } from './socialPlatforms/youtubeNative';
 import logger from '../utils/logger';
 
 export const getAvailablePlatforms = async (isPro: boolean) => {
@@ -303,6 +304,17 @@ export const createConnectSession = async (platform: string, deviceId: string, c
         throw new Error(`LIMIT_REACHED: ${tierLabel} is limited to ${limit} social connection${limit === 1 ? '' : 's'}.`);
     }
 
+    // YouTube bypasses Zernio entirely — Zernio has no YouTube upload
+    // capability at all (confirmed against its real API surface), so there's
+    // no point trying it first and falling through on failure like the dead
+    // Facebook/LinkedIn/Twitter native-OAuth paths below do. Uses its own
+    // fixed redirect_uri (not the callbackUrl param) since Google requires
+    // an exact, pre-registered match in Cloud Console.
+    if (normPlatform === 'youtube') {
+        const baseUrl = process.env.APP_URL || 'https://mistreal-backend.onrender.com';
+        return YoutubeNativeAuth.getAuthUrl(deviceId, `${baseUrl}/api/social/youtube/callback`);
+    }
+
     // 1. Try Zernio Adapter if ZERNIO_API_KEY is configured
     if (process.env.ZERNIO_API_KEY) {
         try {
@@ -396,6 +408,10 @@ export const disconnectPlatform = async (deviceId: string, platform: string) => 
             } catch (zernioErr: any) {
                 logger.warn(`⚠️ Zernio deleteAccount warning: ${zernioErr.message}`);
             }
+        }
+
+        if (normPlatform === 'youtube') {
+            user.youtubeRefreshToken = null;
         }
 
         const connected = user.connectedPlatforms || [];

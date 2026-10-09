@@ -30,13 +30,12 @@ router.post('/settings', authenticateUser, validate(userSettingsSchema), async (
         const user = await getResolvedUser(req);
         if (!user) return res.status(404).json({ success: false, error: 'User system unavailable' });
 
-        const { userName, aiPersona, autoReplyDelay, guardianEnabled, emergencyContacts, aiAutoSendEnabled } = req.body;
+        const { userName, aiPersona, autoReplyDelay, guardianEnabled, aiAutoSendEnabled } = req.body;
 
         if (userName !== undefined) user.userName = userName;
         if (aiPersona !== undefined) user.aiPersona = aiPersona;
         if (autoReplyDelay !== undefined) user.autoReplyDelay = autoReplyDelay;
         if (guardianEnabled !== undefined) user.guardianEnabled = guardianEnabled;
-        if (emergencyContacts !== undefined) user.emergencyContacts = emergencyContacts;
         if (aiAutoSendEnabled !== undefined) user.aiAutoSendEnabled = aiAutoSendEnabled;
 
         await user.save();

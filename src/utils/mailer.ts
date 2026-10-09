@@ -48,37 +48,81 @@ export const sendUserComposedEmail = async (
 };
 
 /**
- * 🆘 Emergency alert email to a saved emergency contact. Separate from the
- * milestone email's fire-and-forget pattern — callers (emergencyRoutes) need
- * the real success/failure per-contact to report back how many were notified.
+ * 🆘 Emergency-contact INVITE email — sent once, when the owner adds this
+ * person. Nothing about an actual alert is in here; this only asks them to
+ * confirm/decline the role via confirmUrl (a public, no-login landing page —
+ * see emergencyRoutes.ts). Replaces the old one-directional flow where a
+ * contact was never notified at all that they'd been listed.
  */
-export const sendEmergencyAlertEmail = async (
+export const sendEmergencyContactInviteEmail = async (
     toEmail: string,
     contactName: string,
-    senderName: string,
-    distressSignature: string,
-    latitude: number,
-    longitude: number
+    ownerName: string,
+    confirmUrl: string
 ): Promise<boolean> => {
     const transporter = getTransporter();
     const user = process.env.GMAIL_USER;
     if (!transporter || !user) {
-        console.warn('⚠️ GMAIL_USER or GMAIL_APP_PASS not set. Emergency email skipped.');
+        console.warn('⚠️ GMAIL_USER or GMAIL_APP_PASS not set. Emergency contact invite skipped.');
         return false;
     }
 
-    const mapsLink = `https://www.google.com/maps?q=${latitude},${longitude}`;
+    const mailOptions = {
+        from: user,
+        to: toEmail,
+        subject: `${ownerName} added you as an emergency contact on Mistreal`,
+        text: `${contactName}, ${ownerName} has added you as their emergency contact on Mistreal. If something happens, you may be notified with their location and a way to check on them. Confirm or decline here: ${confirmUrl}`,
+        html: `
+            <div style="font-family: sans-serif; padding: 20px; border: 1px solid #ddd; border-radius: 8px;">
+                <h2 style="color: #D32F2F;">🛡️ Emergency Contact Request</h2>
+                <p><strong>${contactName}</strong>, <strong>${ownerName}</strong> has added you as their emergency contact on Mistreal.</p>
+                <p>If they ever trigger a safety alert, you may be notified with their last known location so you can check on them.</p>
+                <p><a href="${confirmUrl}" style="display:inline-block;background:#D32F2F;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;">Review &amp; Respond</a></p>
+                <p style="color: #666; font-size: 12px;">You don't need to install anything to confirm or decline.</p>
+            </div>
+        `
+    };
+
+    try {
+        await transporter.sendMail(mailOptions);
+        console.log(`✅ Emergency contact invite sent to ${toEmail}`);
+        return true;
+    } catch (error: any) {
+        console.error(`❌ Error sending emergency contact invite to ${toEmail}:`, error.message);
+        return false;
+    }
+};
+
+/**
+ * 🆘 A real fired alert, to an already-CONFIRMED contact only. Links to the
+ * alert-detail/respond page (location + playable SOS audio + confirm-safe /
+ * raise-concern buttons).
+ */
+export const sendEmergencyAlertNotificationEmail = async (
+    toEmail: string,
+    contactName: string,
+    senderName: string,
+    distressSignature: string,
+    respondUrl: string
+): Promise<boolean> => {
+    const transporter = getTransporter();
+    const user = process.env.GMAIL_USER;
+    if (!transporter || !user) {
+        console.warn('⚠️ GMAIL_USER or GMAIL_APP_PASS not set. Emergency alert email skipped.');
+        return false;
+    }
+
     const mailOptions = {
         from: user,
         to: toEmail,
         subject: `🆘 SOS Alert from ${senderName || 'a Mistreal contact'}`,
-        text: `${contactName}, this is an emergency alert from ${senderName || 'your Mistreal contact'}.\n\nReason: ${distressSignature}\nLast known location: ${mapsLink}\n\nThis alert was sent automatically by the Mistreal app.`,
+        text: `${contactName}, this is an emergency alert from ${senderName || 'your Mistreal contact'}.\n\nReason: ${distressSignature}\n\nView their location and respond: ${respondUrl}`,
         html: `
             <div style="font-family: sans-serif; padding: 20px; border: 2px solid #D32F2F;">
                 <h2 style="color: #D32F2F;">🆘 SOS Alert</h2>
                 <p><strong>${contactName}</strong>, this is an emergency alert from <strong>${senderName || 'your Mistreal contact'}</strong>.</p>
                 <p>Reason: ${distressSignature}</p>
-                <p>Last known location: <a href="${mapsLink}">${mapsLink}</a></p>
+                <p><a href="${respondUrl}" style="display:inline-block;background:#D32F2F;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;">View location &amp; respond</a></p>
                 <p style="color: #666; font-size: 12px;">This alert was sent automatically by the Mistreal app.</p>
             </div>
         `
@@ -86,10 +130,10 @@ export const sendEmergencyAlertEmail = async (
 
     try {
         await transporter.sendMail(mailOptions);
-        console.log(`✅ Emergency email sent to ${toEmail}`);
+        console.log(`✅ Emergency alert email sent to ${toEmail}`);
         return true;
     } catch (error: any) {
-        console.error(`❌ Error sending emergency email to ${toEmail}:`, error.message);
+        console.error(`❌ Error sending emergency alert email to ${toEmail}:`, error.message);
         return false;
     }
 };

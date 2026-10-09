@@ -1,8 +1,10 @@
 import { Router, Request, Response } from 'express';
+import multer from 'multer';
 import { Op } from 'sequelize';
 import { UnifiedSocialService } from '../services/socialPlatforms/unified';
 import { createConnectSession, getAvailablePlatforms, sendSocialAction, exchangeOAuthCode, disconnectPlatform, getPlatformContacts, getUnreadMessages, getSocialHistory, reconcileUserPlatforms, normalizePlatformId, isPlatformMatching, setContactAutoReply } from '../services/socialService';
 import { ZernioAdapter } from '../services/socialPlatforms/zernioAdapter';
+import { YoutubeNativeAuth, uploadYoutubeVideo } from '../services/socialPlatforms/youtubeNative';
 import { User, SocialEvent } from '../models/userModel';
 import { WebhookService } from '../services/webhookService';
 import { authenticateUser, optionalAuthenticateUser } from '../utils/authMiddleware';
@@ -12,6 +14,40 @@ import { validate, socialActionSchema } from '../middleware/validationMiddleware
 import { storeMediaBase64, buildMediaUrl } from '../utils/mediaStore';
 
 const router = Router();
+const videoUpload = multer({ storage: multer.memoryStorage() });
+
+// Shared by the generic Zernio callback and the dedicated YouTube callback
+// below — same look, same auto-redirect-then-manual-button behavior.
+const buildConnectSuccessPage = (normPlatform: string, deviceId: string, success: boolean = true): string => {
+    const appDeepLink = `mistreal://social-connected?platform=${normPlatform}&success=${success}&deviceId=${deviceId}`;
+    return `
+        <html>
+            <head>
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <style>
+                    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; text-align: center; }
+                    .card { background: #1e293b; padding: 32px; border-radius: 16px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.3); max-width: 400px; width: 90%; }
+                    h2 { color: #4ade80; margin-bottom: 12px; }
+                    p { color: #94a3b8; margin-bottom: 24px; font-size: 14px; }
+                    .btn { display: inline-block; background: #6366f1; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 16px; transition: background 0.2s; }
+                    .btn:hover { background: #4f46e5; }
+                </style>
+                <script>
+                    setTimeout(function() {
+                        window.location.href = "${appDeepLink}";
+                    }, 500);
+                </script>
+            </head>
+            <body>
+                <div class="card">
+                    <h2>✅ Connected Successfully!</h2>
+                    <p>Your ${normPlatform} account has been successfully linked. Tap below to return to Mistreal.</p>
+                    <a href="${appDeepLink}" class="btn">Return to Mistreal App</a>
+                </div>
+            </body>
+        </html>
+    `;
+};
 
 // 🛡️ STRATEGIC USER RESOLUTION
 const getResolvedUser = async (req: any) => {
@@ -129,38 +165,35 @@ router.get('/callback', async (req: Request, res: Response) => {
         const isVerified = verifiedPlatforms.some(p => isPlatformMatching(p, normPlatform)) ||
                            (user.connectedPlatforms || []).some(p => isPlatformMatching(p, normPlatform));
 
-        const appDeepLink = `mistreal://social-connected?platform=${normPlatform}&success=${isVerified}&deviceId=${deviceId}`;
-
         // Return a professional success handshake page with auto-redirect AND a manual return button
-        res.send(`
-            <html>
-                <head>
-                    <meta name="viewport" content="width=device-width, initial-scale=1">
-                    <style>
-                        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; text-align: center; }
-                        .card { background: #1e293b; padding: 32px; border-radius: 16px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.3); max-width: 400px; width: 90%; }
-                        h2 { color: #4ade80; margin-bottom: 12px; }
-                        p { color: #94a3b8; margin-bottom: 24px; font-size: 14px; }
-                        .btn { display: inline-block; background: #6366f1; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 16px; transition: background 0.2s; }
-                        .btn:hover { background: #4f46e5; }
-                    </style>
-                    <script>
-                        setTimeout(function() {
-                            window.location.href = "${appDeepLink}";
-                        }, 500);
-                    </script>
-                </head>
-                <body>
-                    <div class="card">
-                        <h2>✅ Connected Successfully!</h2>
-                        <p>Your ${normPlatform} account has been successfully linked. Tap below to return to Mistreal.</p>
-                        <a href="${appDeepLink}" class="btn">Return to Mistreal App</a>
-                    </div>
-                </body>
-            </html>
-        `);
+        res.send(buildConnectSuccessPage(normPlatform, deviceId, isVerified));
     } catch (error: any) {
         logger.error(`❌ Callback processing error: ${error.message}`);
+        res.status(500).send(`Connection failed: ${error.message}`);
+    }
+});
+
+/**
+ * 2a. YOUTUBE CALLBACK (native Google OAuth — separate from the Zernio
+ * callback above since it needs its own fixed redirect_uri registered in
+ * Google Cloud Console, and exchanges the code against Google directly
+ * rather than through Zernio).
+ */
+router.get('/youtube/callback', async (req: Request, res: Response) => {
+    try {
+        const { state, code } = req.query;
+        if (!code || !state) return res.status(400).send('Invalid callback parameters');
+
+        const decodedState = JSON.parse(Buffer.from(state as string, 'base64').toString('utf8'));
+        const deviceId = decodedState.deviceId as string;
+        if (!deviceId) return res.status(400).send('Invalid state parameter');
+
+        const baseUrl = process.env.APP_URL || 'https://mistreal-backend.onrender.com';
+        await YoutubeNativeAuth.exchangeCodeAndStore(deviceId, code as string, `${baseUrl}/api/social/youtube/callback`);
+
+        res.send(buildConnectSuccessPage('youtube', deviceId));
+    } catch (error: any) {
+        logger.error(`❌ YouTube callback error: ${error.message}`);
         res.status(500).send(`Connection failed: ${error.message}`);
     }
 });
@@ -289,6 +322,42 @@ router.post('/action', authenticateUser, validate(socialActionSchema), async (re
         const result = await sendSocialAction(user, { platform, type, content, targetId, mediaUrl, shareToCommunity });
         res.json(result);
     } catch (error: any) { res.status(500).json({ error: error.message }); }
+});
+
+/**
+ * Native YouTube upload — bypasses the generic /action → Zernio pipeline
+ * entirely, since Zernio has no YouTube posting capability at all. Separate
+ * multipart route (not mediaBase64) because video needs real file streaming,
+ * not a JSON-body base64 blob — same reasoning as the Ads upload route.
+ */
+router.post('/youtube/upload', authenticateUser, videoUpload.single('video'), async (req: Request, res: Response) => {
+    try {
+        const { deviceId, title, description, privacyStatus } = req.body;
+        if (!deviceId || !title) {
+            return res.status(200).json({ success: false, error: 'deviceId and title are required' });
+        }
+        if (!req.file) {
+            return res.status(200).json({ success: false, error: 'A video file is required.' });
+        }
+
+        const normalizedPrivacy = ['public', 'unlisted', 'private'].includes(privacyStatus) ? privacyStatus : 'public';
+        const result = await uploadYoutubeVideo(deviceId, req.file.buffer, title, description || '', normalizedPrivacy);
+        res.json({ success: true, videoId: result.videoId, url: result.url });
+    } catch (error: any) {
+        logger.error(`❌ YouTube upload error: ${error.message}`);
+        res.status(200).json({ success: false, error: error.message });
+    }
+});
+
+router.get('/youtube/status', optionalAuthenticateUser, async (req: Request, res: Response) => {
+    try {
+        const deviceId = (req.query.deviceId) as string;
+        if (!deviceId) return res.status(200).json({ success: false, connected: false, error: 'deviceId required' });
+        const connected = await YoutubeNativeAuth.isConnected(deviceId);
+        res.json({ success: true, connected });
+    } catch (error: any) {
+        res.status(200).json({ success: false, connected: false, error: error.message });
+    }
 });
 
 // Which platforms' Community Feed content this viewer wants to see —

@@ -61,7 +61,6 @@ export const userSettingsSchema = z.object({
         aiPersona: z.string().optional(),
         autoReplyDelay: z.number().optional(),
         guardianEnabled: z.boolean().optional(),
-        emergencyContacts: z.array(z.any()).optional(),
         aiAutoSendEnabled: z.boolean().optional(),
     })
 });

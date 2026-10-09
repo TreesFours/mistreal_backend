@@ -8,6 +8,11 @@ export interface SocialPlatformCapabilities {
   supportsFollow: boolean;
   supportsLike: boolean;
   supportsComments: boolean;
+  // True when real posting goes through a dedicated native OAuth + upload
+  // path (youtubeNative.ts) instead of the generic Zernio /action pipeline
+  // — Zernio has no posting capability at all for these platforms, so the
+  // compose flow needs to know to dispatch differently, not just gate a button.
+  supportsNativeUpload: boolean;
 }
 
 export interface SocialPlatformDefinition {
@@ -25,7 +30,8 @@ const FULL_SOCIAL: SocialPlatformCapabilities = {
   supportsDM: true,
   supportsFollow: false,
   supportsLike: true,
-  supportsComments: true
+  supportsComments: true,
+  supportsNativeUpload: false
 };
 
 const DM_ONLY: SocialPlatformCapabilities = {
@@ -35,7 +41,8 @@ const DM_ONLY: SocialPlatformCapabilities = {
   supportsDM: true,
   supportsFollow: false,
   supportsLike: false,
-  supportsComments: false
+  supportsComments: false,
+  supportsNativeUpload: false
 };
 
 const READ_ONLY_FEED: SocialPlatformCapabilities = {
@@ -45,7 +52,8 @@ const READ_ONLY_FEED: SocialPlatformCapabilities = {
   supportsDM: false,
   supportsFollow: false,
   supportsLike: false,
-  supportsComments: false
+  supportsComments: false,
+  supportsNativeUpload: false
 };
 
 /**
@@ -136,7 +144,12 @@ const PLATFORM_DEFINITIONS: Record<string, SocialPlatformDefinition> = {
     displayName: 'YouTube',
     icon: '📺',
     color: '#FF0000',
-    capabilities: { ...READ_ONLY_FEED, supportsComments: true }
+    // Feed-reading is still the API-key-only curated list (no per-user
+    // identity) — real per-user video upload is separate, native Google
+    // OAuth (youtubeNative.ts), hence supportsNativeUpload rather than
+    // routing through the generic Zernio /action pipeline like supportsDM
+    // platforms do.
+    capabilities: { ...READ_ONLY_FEED, supportsComments: true, supportsNativeUpload: true }
   },
   twitch: {
     id: 'twitch',

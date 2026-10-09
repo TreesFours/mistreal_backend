@@ -16,7 +16,7 @@ import multer from 'multer';
 import dotenv from 'dotenv';
 import { Op } from 'sequelize';
 import { getAiResponse, getAvailableModels, extractImageData, extractAudioData, extractVideoData } from './services/aiService';
-import { getSocialSummary, createConnectSession, sendSocialAction } from './services/socialService';
+import { getSocialSummary, createConnectSession, sendSocialAction, reconcileUserPlatforms } from './services/socialService';
 import { createSubscriptionSession, handleWebhook } from './services/stripeService';
 import { getWeatherData } from './services/weatherService';
 import { getDetailedAstroData } from './services/astroService';
@@ -51,6 +51,10 @@ import emailRoutes from './routes/emailRoutes';
 import marketRoutes from './routes/marketRoutes';
 import { checkAlerts as checkMarketAlerts } from './services/marketDataService';
 import { MarketAlert } from './models/MarketAlert'; // imported for Sequelize registration — table is created by sequelize.sync below
+import { EmergencyContact } from './models/EmergencyContact'; // same — registration only
+import { EmergencyAlert } from './models/EmergencyAlert'; // same — registration only
+import { EmergencyAlertResponse } from './models/EmergencyAlertResponse'; // same — registration only
+import logger from './utils/logger';
 
 dotenv.config();
 
@@ -90,6 +94,10 @@ app.use(express.json({
         req.rawBody = buf;
     }
 }));
+// Needed for the plain HTML <form method="POST"> confirm/response pages in
+// emergencyRoutes.ts — those submit as application/x-www-form-urlencoded,
+// not JSON, since they're meant to work for someone with no app installed.
+app.use(express.urlencoded({ extended: true }));
 
 // 🔗 Core Routes
 app.use('/api/social', socialRoutes);
@@ -484,6 +492,48 @@ setInterval(async () => {
         }
     } catch (err: any) {}
 }, 60000);
+
+// 🆘 Guardian escalation sweep: an active EmergencyAlert past its 30-day
+// escalateAt with zero confirmed-contact responses auto-posts to the
+// owner's own connected platforms. Must run server-side (not client
+// WorkManager) since it has to fire even if the triggering phone is off —
+// that's the entire point of an emergency escalation. Checked hourly, not
+// every minute like the DelayedAction sweep above — a 30-day deadline has
+// no need for minute-level precision.
+setInterval(async () => {
+    if (!DATABASE_URL) return;
+    try {
+        const overdue = await EmergencyAlert.findAll({
+            where: { status: 'active', escalateAt: { [Op.lte]: new Date() } }
+        });
+        for (const alert of overdue) {
+            const responseCount = await EmergencyAlertResponse.count({ where: { alertId: alert.id } });
+            if (responseCount > 0) {
+                // Someone responded since this was last checked — resolving
+                // here just means "don't escalate", not "confirmed safe";
+                // the owner or a contact can still mark it resolved properly.
+                continue;
+            }
+            const user = await User.findOne({ where: { deviceId: alert.ownerDeviceId } });
+            if (!user) continue;
+            try {
+                const connected = await reconcileUserPlatforms(user);
+                const mapsLink = `https://www.google.com/maps?q=${alert.latitude},${alert.longitude}`;
+                const message = `🆘 Unconfirmed SOS alert from ${user.userName || 'a Mistreal user'} — no emergency contact has responded in 30 days. Last known location: ${mapsLink}${alert.sosAudioUrl ? ` — audio: ${alert.sosAudioUrl}` : ''} — sent via Mistreal.`;
+                await Promise.allSettled(
+                    connected.map((platform: string) => sendSocialAction(user, { platform, type: 'Post', content: message }))
+                );
+                logger.info(`🆘 Escalated unconfirmed alert ${alert.id} (device ${alert.ownerDeviceId}) to [${connected.join(', ')}]`);
+            } catch (e: any) {
+                logger.error(`❌ Escalation broadcast failed for alert ${alert.id}: ${e.message}`);
+            }
+            alert.status = 'escalated_public';
+            await alert.save();
+        }
+    } catch (err: any) {
+        logger.error(`❌ Guardian Escalation Sweep Error: ${err.message}`);
+    }
+}, 60 * 60 * 1000); // Hourly
 
 // 🔍 404 Catch-all
 app.use((req, res) => {

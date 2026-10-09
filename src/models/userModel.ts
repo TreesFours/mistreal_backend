@@ -18,6 +18,9 @@ export class User extends Model {
     public autoReplyDelay!: number;
     public vipList!: string[];
     public guardianEnabled!: boolean;
+    // Deprecated — superseded by the EmergencyContact table (confirm/decline
+    // flow, see emergencyRoutes.ts). Column kept in place rather than
+    // dropped to avoid a destructive migration; nothing writes to it anymore.
     public emergencyContacts!: any[];
     public connectedPlatforms!: string[];
     public unreadMessagesCount!: number;
@@ -44,6 +47,12 @@ export class User extends Model {
     public discordAccessToken!: string | null;
     public telegramAccessToken!: string | null;
     public redditAccessToken!: string | null;
+    // Native Google OAuth (bypasses Zernio entirely — Zernio has no YouTube
+    // upload capability at all). AES-256-GCM encrypted via secretCrypto.ts,
+    // unlike the plaintext tokens above — a leaked refresh_token here is
+    // standing upload access to the user's real channel, not a short-lived
+    // session, so it gets the same protection as BYOK provider keys.
+    public youtubeRefreshToken!: string | null;
 
     // 🔑 Bring-your-own-key AI provider (byokEncryptedKey is AES-256-GCM, never plaintext)
     public byokEnabled!: boolean;
@@ -113,6 +122,7 @@ User.init({
     discordAccessToken: { type: DataTypes.TEXT, allowNull: true },
     telegramAccessToken: { type: DataTypes.TEXT, allowNull: true },
     redditAccessToken: { type: DataTypes.TEXT, allowNull: true },
+    youtubeRefreshToken: { type: DataTypes.TEXT, allowNull: true },
 
     // 🔑 Bring-your-own-key AI provider
     byokEnabled: { type: DataTypes.BOOLEAN, defaultValue: false },

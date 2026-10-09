@@ -8,7 +8,7 @@ import logger from '../utils/logger';
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
-const persistToStorage = async (buffer: Buffer, contentType: string, path: string): Promise<string> => {
+export const persistToStorage = async (buffer: Buffer, contentType: string, path: string): Promise<string> => {
     const bucket = admin.storage().bucket();
     const file = bucket.file(path);
     await file.save(buffer, { metadata: { contentType } });
