@@ -37,6 +37,7 @@ import { verifyPurchase } from './services/googlePlayService';
 import socialRoutes from './routes/socialRoutes';
 import webhookRoutes from './routes/webhookRoutes';
 import businessRoutes from './routes/businessRoutes';
+import meetupRoutes, { sweepSilentMeetups } from './routes/meetupRoutes';
 import adRoutes from './routes/adRoutes';
 import { ZernioAdapter } from './services/socialPlatforms/zernioAdapter';
 import { getLocationPhoto } from './services/locationPhotoService';
@@ -54,6 +55,8 @@ import { MarketAlert } from './models/MarketAlert'; // imported for Sequelize re
 import { EmergencyContact } from './models/EmergencyContact'; // same — registration only
 import { EmergencyAlert } from './models/EmergencyAlert'; // same — registration only
 import { EmergencyAlertResponse } from './models/EmergencyAlertResponse'; // same — registration only
+import { MeetupProposal } from './models/MeetupProposal'; // same — registration only
+import { MeetupConfirmation } from './models/MeetupConfirmation'; // same — registration only
 import logger from './utils/logger';
 
 dotenv.config();
@@ -107,6 +110,7 @@ app.use('/api/ai-provider', aiProviderRoutes);
 app.use('/api/emergency', emergencyRoutes);
 app.use('/api/email', emailRoutes);
 app.use('/api/business', businessRoutes);
+app.use('/api/meetups', meetupRoutes);
 app.use('/api/ads', adRoutes);
 app.use('/api/markets', marketRoutes);
 
@@ -532,6 +536,18 @@ setInterval(async () => {
         }
     } catch (err: any) {
         logger.error(`❌ Guardian Escalation Sweep Error: ${err.message}`);
+    }
+}, 60 * 60 * 1000); // Hourly
+
+// 🤝 Silent-meetup sweep: a scheduled meetup nobody confirmed 10 days after
+// the fact raises a real Guardian alert (see meetupRoutes.ts) rather than
+// a second, parallel notification system.
+setInterval(async () => {
+    if (!DATABASE_URL) return;
+    try {
+        await sweepSilentMeetups();
+    } catch (err: any) {
+        logger.error(`❌ Silent Meetup Sweep Error: ${err.message}`);
     }
 }, 60 * 60 * 1000); // Hourly
 
