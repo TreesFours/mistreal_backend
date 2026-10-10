@@ -190,7 +190,7 @@ router.post('/:id/respond', async (req: Request, res: Response) => {
  */
 router.post('/:id/confirm', async (req: Request, res: Response) => {
     try {
-        const { deviceId, latitude, longitude, outcome, reasonIfFailed, reviewText, photoBase64, photoMimeType } = req.body;
+        const { deviceId, latitude, longitude, outcome, reasonIfFailed, reviewText, buyerVote, photoBase64, photoMimeType } = req.body;
         if (!deviceId || latitude === undefined || longitude === undefined || !outcome) {
             return res.status(200).json({ success: false, error: 'deviceId, latitude, longitude and outcome are required' });
         }
@@ -207,9 +207,16 @@ router.post('/:id/confirm', async (req: Request, res: Response) => {
             }
         }
 
+        // A thumbs up/down only ever makes sense from the buyer's side of a
+        // business transaction — the proposer, per the real flow (customer
+        // discovers -> contacts -> proposes) — never on the business's own
+        // confirmation of its own sale.
+        const isBuyerSide = meetup.businessId && deviceId === meetup.proposerDeviceId;
+        const validVote = isBuyerSide && outcome === 'success' && (buyerVote === 'up' || buyerVote === 'down') ? buyerVote : null;
+
         const [confirmation] = await MeetupConfirmation.findOrCreate({
             where: { meetupId: meetup.id, deviceId },
-            defaults: { meetupId: meetup.id, deviceId, latitude, longitude, photoUrl, outcome, reasonIfFailed: reasonIfFailed || null, reviewText: reviewText || null }
+            defaults: { meetupId: meetup.id, deviceId, latitude, longitude, photoUrl, outcome, reasonIfFailed: reasonIfFailed || null, reviewText: reviewText || null, buyerVote: validVote }
         });
 
         if (meetup.status === 'accepted') {

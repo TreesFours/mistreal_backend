@@ -3,6 +3,7 @@ import multer from 'multer';
 import * as admin from 'firebase-admin';
 import { getOrCreateUserInternal } from '../utils/userResolver';
 import { createAd, getNextAd, isAdDue, isEligibleForAds, trackAdEvent } from '../services/adService';
+import { Ad } from '../models/adModel';
 import logger from '../utils/logger';
 
 const router = Router();
@@ -96,6 +97,22 @@ router.get('/due', async (req: Request, res: Response) => {
     } catch (e: any) {
         logger.error(`❌ GET /ads/due error: ${e.message}`);
         res.status(200).json({ success: false, due: false, ad: null, error: e.message });
+    }
+});
+
+/**
+ * A business's own ad, for its profile banner — distinct from /due's
+ * round-robin feed placement. Loops client-side (restart from the first
+ * image once the slideshow/video ends) until the owner replaces it with a
+ * new createAd call, which already deletes the prior one (see adService.ts).
+ */
+router.get('/business/:businessId', async (req: Request, res: Response) => {
+    try {
+        const ad = await Ad.findOne({ where: { businessId: req.params.businessId, isActive: true } });
+        res.json({ success: true, ad });
+    } catch (e: any) {
+        logger.error(`❌ GET /ads/business/:businessId error: ${e.message}`);
+        res.status(200).json({ success: false, ad: null, error: e.message });
     }
 });
 

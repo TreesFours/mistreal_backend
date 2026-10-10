@@ -10,6 +10,7 @@ import { VideoEditProvider } from './ai/videoEditProvider';
 import { ImageGenProvider } from './ai/imageGenProvider';
 import { AiProviderConfig } from '../models/AiProviderConfig';
 import { storeMediaBase64, buildMediaUrl } from '../utils/mediaStore';
+import { hasAddon } from './addonService';
 
 const GOOGLE_AI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 
@@ -624,7 +625,10 @@ export const getAiResponse = async (
 
     if (isGoogleModel && geminiKey) {
         let targetModel = activeProvider === 'dynamic' ? "" : activeProvider;
-        const rankedCandidates = await getRankedGeminiModels(user?.isPro);
+        // Gated on the specific ai_pro add-on now, not the generic isPro flag
+        // (which only means "has any add-on" — see addonService.ts).
+        const hasAiPro = user?.deviceId ? await hasAddon(user.deviceId, 'ai_pro') : false;
+        const rankedCandidates = await getRankedGeminiModels(hasAiPro);
 
         if (!targetModel || targetModel === 'dynamic') {
             targetModel = rankedCandidates[0] || "gemini-1.5-flash";

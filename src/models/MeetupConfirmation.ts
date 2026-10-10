@@ -19,6 +19,12 @@ export class MeetupConfirmation extends Model {
     public outcome!: string; // 'success' | 'failed'
     public reasonIfFailed!: string | null;
     public reviewText!: string | null;
+    // Only meaningful on the proposer's row of a businessId-tagged,
+    // outcome='success' confirmation — i.e. the buyer's side, per the real
+    // flow (customer discovers -> contacts -> proposes). Aggregated on the
+    // business profile; the business's own confirmation row never carries a
+    // vote on itself.
+    public buyerVote!: string | null; // 'up' | 'down' | null
     public confirmedAt!: Date;
 }
 
@@ -31,6 +37,7 @@ MeetupConfirmation.init({
     outcome: { type: DataTypes.STRING, allowNull: false },
     reasonIfFailed: { type: DataTypes.STRING, allowNull: true },
     reviewText: { type: DataTypes.TEXT, allowNull: true },
+    buyerVote: { type: DataTypes.STRING, allowNull: true },
     confirmedAt: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW }
 }, {
     sequelize,

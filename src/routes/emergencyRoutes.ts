@@ -3,6 +3,8 @@ import crypto from 'crypto';
 import { getOrCreateUserInternal } from '../utils/userResolver';
 import { sendSocialAction } from '../services/socialService';
 import { sendEmergencyContactInviteEmail, sendEmergencyAlertNotificationEmail } from '../utils/mailer';
+import { sendSms } from '../utils/smsSender';
+import { hasAddon } from '../services/addonService';
 import { persistToStorage } from './adRoutes';
 import { EmergencyContact } from '../models/EmergencyContact';
 import { EmergencyAlert } from '../models/EmergencyAlert';
@@ -75,7 +77,7 @@ router.get('/contacts', async (req: Request, res: Response) => {
 
 router.post('/contacts', async (req: Request, res: Response) => {
     try {
-        const { deviceId, firebaseUid, name, channel, platform, platformContactId, email } = req.body;
+        const { deviceId, firebaseUid, name, channel, platform, platformContactId, email, phoneNumber } = req.body;
         if (!deviceId || !name || !channel) {
             return res.status(200).json({ success: false, error: 'deviceId, name and channel are required' });
         }
@@ -84,6 +86,12 @@ router.post('/contacts', async (req: Request, res: Response) => {
         }
         if (channel === 'email' && !email) {
             return res.status(200).json({ success: false, error: 'email is required for an email contact' });
+        }
+        if (channel === 'sms') {
+            if (!phoneNumber) return res.status(200).json({ success: false, error: 'phoneNumber is required for an SMS contact' });
+            if (!(await hasAddon(deviceId, 'sms_notifications'))) {
+                return res.status(200).json({ success: false, error: 'SMS Notifications add-on is not active on your account.' });
+            }
         }
 
         const user = await getOrCreateUserInternal(deviceId, firebaseUid);
@@ -97,12 +105,14 @@ router.post('/contacts', async (req: Request, res: Response) => {
             platform: channel === 'platform' ? platform : null,
             platformContactId: channel === 'platform' ? platformContactId : null,
             email: channel === 'email' ? email : null,
+            phoneNumber: channel === 'sms' ? phoneNumber : null,
             status: 'pending',
             confirmToken
         });
 
         const confirmUrl = `${appUrl()}/api/emergency/confirm/${confirmToken}`;
         const ownerName = user.userName || 'A Mistreal user';
+        const inviteMessage = `${ownerName} added you as their emergency contact on Mistreal. Confirm or decline: ${confirmUrl}`;
 
         // Best-effort — the contact row is already saved either way; the
         // owner can see it's still "pending" and re-send/remove it later if
@@ -110,11 +120,14 @@ router.post('/contacts', async (req: Request, res: Response) => {
         if (channel === 'email') {
             sendEmergencyContactInviteEmail(email, name, ownerName, confirmUrl)
                 .catch((e: any) => logger.warn(`⚠️ Emergency contact invite email failed: ${e.message}`));
+        } else if (channel === 'sms') {
+            sendSms(phoneNumber, inviteMessage)
+                .catch((e: any) => logger.warn(`⚠️ Emergency contact invite SMS failed: ${e.message}`));
         } else {
             sendSocialAction(user, {
                 platform,
                 type: 'Direct Message',
-                content: `${ownerName} added you as their emergency contact on Mistreal. Confirm or decline: ${confirmUrl}`,
+                content: inviteMessage,
                 targetId: platformContactId
             }).catch((e: any) => logger.warn(`⚠️ Emergency contact invite DM failed: ${e.message}`));
         }
@@ -255,12 +268,22 @@ router.post('/alerts', async (req: Request, res: Response) => {
 
         const confirmedContacts = await EmergencyContact.findAll({ where: { ownerDeviceId: deviceId, status: 'confirmed' } });
         const senderName = user.userName || 'a Mistreal user';
+        // Re-checked at send time, not just at invite time — the owner could
+        // have canceled the add-on since adding this contact.
+        const smsEnabled = await hasAddon(deviceId, 'sms_notifications');
 
         const notifyResults = await Promise.allSettled(confirmedContacts.map(async (contact) => {
             const token = signResponseToken(alert.id, contact.id);
             const respondUrl = `${appUrl()}/api/emergency/alerts/${alert.id}/respond/${contact.id}/${token}`;
             if (contact.channel === 'email' && contact.email) {
                 return sendEmergencyAlertNotificationEmail(contact.email, contact.name, senderName, signature, respondUrl);
+            }
+            if (contact.channel === 'sms' && contact.phoneNumber) {
+                if (!smsEnabled) {
+                    logger.warn(`⚠️ Skipped SMS to confirmed contact ${contact.id}: sms_notifications add-on no longer active for device ${deviceId}`);
+                    return;
+                }
+                return sendSms(contact.phoneNumber, `🆘 SOS Alert from ${senderName}. ${signature}. View location & respond: ${respondUrl}`);
             }
             if (contact.channel === 'platform' && contact.platform && contact.platformContactId) {
                 return sendSocialAction(user, {

@@ -17,7 +17,6 @@ import dotenv from 'dotenv';
 import { Op } from 'sequelize';
 import { getAiResponse, getAvailableModels, extractImageData, extractAudioData, extractVideoData } from './services/aiService';
 import { getSocialSummary, createConnectSession, sendSocialAction, reconcileUserPlatforms } from './services/socialService';
-import { createSubscriptionSession, handleWebhook } from './services/stripeService';
 import { getWeatherData } from './services/weatherService';
 import { getDetailedAstroData } from './services/astroService';
 import { IntelligenceService } from './services/intelligenceService';
@@ -57,6 +56,9 @@ import { EmergencyAlert } from './models/EmergencyAlert'; // same — registrati
 import { EmergencyAlertResponse } from './models/EmergencyAlertResponse'; // same — registration only
 import { MeetupProposal } from './models/MeetupProposal'; // same — registration only
 import { MeetupConfirmation } from './models/MeetupConfirmation'; // same — registration only
+import { UserAddon } from './models/UserAddon';
+import { getAddonCatalog, getAddonByPlayProductId } from './services/addonCatalog';
+import { recomputeIsPro, hasAddon } from './services/addonService';
 import logger from './utils/logger';
 
 dotenv.config();
@@ -163,20 +165,21 @@ app.post('/api/chat', upload.fields([{ name: 'images', maxCount: 5 }, { name: 'a
     res.json(response);
 });
 
-// 🔍 Model Catalog
+// 🔍 Model Catalog — gated on the specific ai_pro add-on, not generic isPro
+// (which only means "has any add-on at all" — see addonService.ts).
 app.get('/api/models', async (req, res) => {
     const { deviceId } = req.query;
-    let isPro = false;
+    let hasAiPro = false;
     if (deviceId) {
-        const user = await getOrCreateUserInternal(String(deviceId));
-        isPro = user?.isPro ?? false;
+        await getOrCreateUserInternal(String(deviceId));
+        hasAiPro = await hasAddon(String(deviceId), 'ai_pro');
     }
 
     // 🛡️ Tactical Quota Calculation: Count total users to split shared resources
     const freeUserCount = await User.count({ where: { isPro: false } }) || 1;
     const proUserCount = await User.count({ where: { isPro: true } }) || 1;
 
-    const models = await getAvailableModels(isPro, freeUserCount, proUserCount);
+    const models = await getAvailableModels(hasAiPro, freeUserCount, proUserCount);
     res.json(models);
 });
 
@@ -188,17 +191,6 @@ app.get('/api/social/sync', async (req: Request, res: Response) => {
     if (!user) return res.status(404).json({ error: 'User not found' });
     const summary = await getSocialSummary(user, user.isPro || false);
     res.json(summary);
-});
-
-// 💰 Stripe Sessions
-app.post('/api/subscribe', async (req: any, res: any) => {
-    const { tier, deviceId } = req.body;
-    try {
-        if (!deviceId) return res.status(400).json({ success: false, error: 'deviceId is required' });
-        await getOrCreateUserInternal(deviceId);
-        const checkoutUrl = await createSubscriptionSession(tier, deviceId);
-        res.json({ success: true, url: checkoutUrl });
-    } catch (error: any) { res.status(500).json({ success: false, error: error.message }); }
 });
 
 // 🌦️ Intelligence Feed
@@ -366,22 +358,60 @@ app.post('/api/user/location', async (req, res) => {
     }
 });
 
-// 💰 Verification
+// 💰 Verification — previously never received deviceId and never wrote
+// anything back to the User row: a real purchase was validated against
+// Google but nothing was ever granted. Now resolves the purchased
+// productId to a catalog add-on, upserts UserAddon, and recomputes isPro.
 app.post('/api/payment/verify', async (req, res) => {
-    const { purchaseToken, productId, packageName } = req.body;
+    const { deviceId, purchaseToken, productId, packageName } = req.body;
+    if (!deviceId || !purchaseToken || !productId) {
+        return res.status(200).json({ success: false, error: 'deviceId, purchaseToken and productId are required' });
+    }
     try {
         const result = await verifyPurchase(packageName || 'com.example.mistreal_mini', productId, purchaseToken);
-        res.json(result);
-    } catch (error: any) { res.status(500).json({ success: false, error: error.message }); }
+        if (!result.success) return res.json(result);
+
+        const addon = getAddonByPlayProductId(productId);
+        if (!addon) {
+            logger.warn(`⚠️ /api/payment/verify: productId ${productId} doesn't match any known add-on — purchase verified with Google but nothing granted.`);
+            return res.json({ ...result, warning: 'Verified but no matching add-on found.' });
+        }
+
+        await UserAddon.upsert({
+            deviceId, addonId: addon.id, status: 'active',
+            playProductId: productId, playPurchaseToken: purchaseToken,
+            expiresAt: result.expiryTime || null
+        });
+        const isPro = await recomputeIsPro(deviceId);
+
+        res.json({ ...result, addonId: addon.id, isPro });
+    } catch (error: any) {
+        logger.error(`❌ /api/payment/verify error: ${error.message}`);
+        res.status(500).json({ success: false, error: error.message });
+    }
 });
 
-// ⚙️ App Config
+app.get('/api/payment/my-addons', async (req, res) => {
+    try {
+        const deviceId = req.query.deviceId as string;
+        if (!deviceId) return res.status(200).json({ success: false, addons: [], error: 'deviceId required' });
+        const rows = await UserAddon.findAll({ where: { deviceId, status: 'active' } });
+        res.json({ success: true, addons: rows.map(r => r.addonId) });
+    } catch (error: any) {
+        res.status(200).json({ success: false, addons: [], error: error.message });
+    }
+});
+
+// ⚙️ App Config — freePlatformLimit/addons now drive the Subscription
+// screen's checklist directly from env vars (see addonCatalog.ts), replacing
+// the old single fixed-tier price/productId.
 app.get('/api/config', async (req, res) => {
     res.json({
         proPrice: process.env.PRO_PRICE || "$9.99/mo",
         productId: process.env.PRO_PRODUCT_ID || "pro_monthly_subscription",
         freeTrialDays: process.env.FREE_TRIAL_DAYS || "7",
-        freePlatformLimit: parseInt(process.env.FREE_USER_PLATFORM_LIMIT || '1', 10)
+        freePlatformLimit: parseInt(process.env.FREE_USER_PLATFORM_LIMIT || '1', 10),
+        addons: getAddonCatalog()
     });
 });
 

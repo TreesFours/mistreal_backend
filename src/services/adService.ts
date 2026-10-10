@@ -2,15 +2,14 @@ import { Op } from 'sequelize';
 import { Ad, AdEvent } from '../models/adModel';
 import logger from '../utils/logger';
 
-/** At least Premium tier 1 — covers every tier vocabulary this backend
- * currently uses (subscriptionTier 'premium1'/'premium2', Stripe's 'pro',
- * or the plain isPro boolean) rather than picking just one and locking out
- * real paying customers because of the naming inconsistency between them.
+/**
+ * Requires at least one active add-on. The fixed-tier vocabulary this used
+ * to special-case (subscriptionTier 'premium1'/'premium2', Stripe's 'pro')
+ * is retired — `isPro` is now a single, reliably-recomputed "has any add-on"
+ * boolean (see addonService.ts::recomputeIsPro), so there's nothing else to
+ * check.
  */
-export const isEligibleForAds = (user: any): boolean => {
-    const tier = (user.subscriptionTier || '').toLowerCase();
-    return user.isPro === true || tier === 'premium1' || tier === 'premium2' || tier === 'pro';
-};
+export const isEligibleForAds = (user: any): boolean => user.isPro === true;
 
 interface CreateAdInput {
     businessId: string;

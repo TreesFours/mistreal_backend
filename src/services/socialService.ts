@@ -6,6 +6,7 @@ import { ZernioAdapter } from './socialPlatforms/zernioAdapter';
 import { FacebookOAuth, LinkedInOAuth } from './socialPlatforms/socialAuthHandlers';
 import { TwitterOAuth } from './socialPlatforms/twitterAuth';
 import { YoutubeNativeAuth } from './socialPlatforms/youtubeNative';
+import { getPlatformLimit } from './addonService';
 import logger from '../utils/logger';
 
 export const getAvailablePlatforms = async (isPro: boolean) => {
@@ -284,24 +285,16 @@ export const createConnectSession = async (platform: string, deviceId: string, c
 
     const normPlatform = normalizePlatformId(platform);
 
-    // 🛡️ TIER LIMIT ENFORCEMENT
-    const tier = user.subscriptionTier?.toLowerCase() || 'free';
-    let limit = parseInt(process.env.FREE_USER_PLATFORM_LIMIT || '1', 10);
-
-    if (tier === 'premium1') {
-        limit = parseInt(process.env.PREMIUM_1_PLATFORM_LIMIT || '5', 10);
-    } else if (tier === 'premium2') {
-        limit = parseInt(process.env.PREMIUM_2_PLATFORM_LIMIT || '99', 10);
-    } else if (user.isPro) {
-        limit = 99;
-    }
+    // 🛡️ ADD-ON LIMIT ENFORCEMENT — replaces the old fixed-tier lookup
+    // (premium1/premium2) with FREE_USER_PLATFORM_LIMIT plus the
+    // extra_platforms add-on's configured bump, if active (addonService.ts).
+    const limit = await getPlatformLimit(deviceId);
 
     const currentConnected = (user.connectedPlatforms || []).map(p => normalizePlatformId(p));
 
     // Allow re-connecting an existing platform, but block NEW ones if limit reached
     if (!currentConnected.includes(normPlatform) && currentConnected.length >= limit) {
-        const tierLabel = tier === 'free' ? 'Free tier' : tier === 'premium1' ? 'Premium 1' : 'Your subscription';
-        throw new Error(`LIMIT_REACHED: ${tierLabel} is limited to ${limit} social connection${limit === 1 ? '' : 's'}.`);
+        throw new Error(`LIMIT_REACHED: Your account is limited to ${limit} social connection${limit === 1 ? '' : 's'}. Add the Extra Platforms add-on to connect more.`);
     }
 
     // YouTube bypasses Zernio entirely — Zernio has no YouTube upload

@@ -29,6 +29,11 @@ export class Business extends Model {
     // never stores a contactId directly since that's specific to whichever
     // Zernio profile looked it up.
     public connectedPlatforms!: { platform: string; handle: string }[];
+    // Owner identity shown on the profile — either their live-captured
+    // Verified Face (resolved client-side, never uploaded here) or a
+    // separately-uploaded photo, per the user's explicit choice of "either."
+    public ownerName!: string | null;
+    public ownerPhotoUrl!: string | null;
 }
 
 Business.init({
@@ -42,7 +47,9 @@ Business.init({
     latitude: { type: DataTypes.FLOAT, allowNull: true },
     longitude: { type: DataTypes.FLOAT, allowNull: true },
     logoUrl: { type: DataTypes.STRING, allowNull: true },
-    connectedPlatforms: { type: DataTypes.JSONB, defaultValue: [] }
+    connectedPlatforms: { type: DataTypes.JSONB, defaultValue: [] },
+    ownerName: { type: DataTypes.STRING, allowNull: true },
+    ownerPhotoUrl: { type: DataTypes.STRING, allowNull: true }
 }, {
     sequelize,
     modelName: 'Business',

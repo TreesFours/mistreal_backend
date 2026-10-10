@@ -12,10 +12,13 @@ export class EmergencyContact extends Model {
     public id!: number;
     public ownerDeviceId!: string;
     public name!: string;
-    public channel!: string; // 'platform' | 'email'
+    public channel!: string; // 'platform' | 'email' | 'sms'
     public platform!: string | null;
     public platformContactId!: string | null;
     public email!: string | null;
+    // 'sms' channel only — requires the OWNER to have the sms_notifications
+    // add-on active before anything is ever sent here (see emergencyRoutes.ts).
+    public phoneNumber!: string | null;
     public status!: string; // 'pending' | 'confirmed' | 'declined'
     public confirmToken!: string;
     public invitedAt!: Date;
@@ -29,6 +32,7 @@ EmergencyContact.init({
     platform: { type: DataTypes.STRING, allowNull: true },
     platformContactId: { type: DataTypes.STRING, allowNull: true },
     email: { type: DataTypes.STRING, allowNull: true },
+    phoneNumber: { type: DataTypes.STRING, allowNull: true },
     status: { type: DataTypes.STRING, allowNull: false, defaultValue: 'pending' },
     confirmToken: { type: DataTypes.STRING, allowNull: false, unique: true },
     invitedAt: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
