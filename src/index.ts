@@ -9,6 +9,8 @@
  * ⚠️ MANDATORY: Never delete history. Only ADD updates/fixes to the Master Map table.
  */
 import express, { Request, Response } from 'express';
+import http from 'http';
+import { Server as SocketIOServer } from 'socket.io';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
@@ -37,6 +39,8 @@ import socialRoutes from './routes/socialRoutes';
 import webhookRoutes from './routes/webhookRoutes';
 import businessRoutes from './routes/businessRoutes';
 import meetupRoutes, { sweepSilentMeetups } from './routes/meetupRoutes';
+import reviewRoutes from './routes/reviewRoutes';
+import cloudStorageRoutes from './routes/cloudStorageRoutes';
 import adRoutes from './routes/adRoutes';
 import { ZernioAdapter } from './services/socialPlatforms/zernioAdapter';
 import { getLocationPhoto } from './services/locationPhotoService';
@@ -56,14 +60,30 @@ import { EmergencyAlert } from './models/EmergencyAlert'; // same — registrati
 import { EmergencyAlertResponse } from './models/EmergencyAlertResponse'; // same — registration only
 import { MeetupProposal } from './models/MeetupProposal'; // same — registration only
 import { MeetupConfirmation } from './models/MeetupConfirmation'; // same — registration only
+import { ComfortMeetConfirmation } from './models/ComfortMeetConfirmation'; // same — registration only
+import { Review } from './models/Review'; // same — registration only
+import { ReviewThreadMessage } from './models/ReviewThreadMessage'; // same — registration only
+import { ReviewThreadParticipant } from './models/ReviewThreadParticipant'; // same — registration only
+import { ReviewThreadInvite } from './models/ReviewThreadInvite'; // same — registration only
+import { CloudStorageConfig } from './models/CloudStorageConfig'; // same — registration only
 import { UserAddon } from './models/UserAddon';
 import { getAddonCatalog, getAddonByPlayProductId } from './services/addonCatalog';
 import { recomputeIsPro, hasAddon } from './services/addonService';
+import { createCheckoutSession, handleStripeWebhook, createBillingPortalSession } from './services/stripeService';
+import { WatchSession } from './models/WatchSession'; // imported for Sequelize registration — table is created by sequelize.sync below
+import { registerWatchSignaling } from './services/watchSignalingService';
 import logger from './utils/logger';
 
 dotenv.config();
 
 const app = express();
+const httpServer = http.createServer(app);
+// Watch Hub (live screencast/share) signaling — pure relay, no video/audio
+// ever passes through this process. A dedicated '/watch' namespace (set up
+// in watchSignalingService.ts) keeps it isolated from any other future use
+// of Socket.IO on this same server.
+const io = new SocketIOServer(httpServer, { cors: { origin: '*' } });
+registerWatchSignaling(io);
 const port = process.env.PORT || 3000;
 const DATABASE_URL = process.env.DATABASE_URL;
 const upload = multer({
@@ -113,6 +133,8 @@ app.use('/api/emergency', emergencyRoutes);
 app.use('/api/email', emailRoutes);
 app.use('/api/business', businessRoutes);
 app.use('/api/meetups', meetupRoutes);
+app.use('/api/reviews', reviewRoutes);
+app.use('/api/cloud-storage', cloudStorageRoutes);
 app.use('/api/ads', adRoutes);
 app.use('/api/markets', marketRoutes);
 
@@ -378,7 +400,7 @@ app.post('/api/payment/verify', async (req, res) => {
         }
 
         await UserAddon.upsert({
-            deviceId, addonId: addon.id, status: 'active',
+            deviceId, addonId: addon.id, status: 'active', provider: 'play',
             playProductId: productId, playPurchaseToken: purchaseToken,
             expiresAt: result.expiryTime || null
         });
@@ -402,6 +424,80 @@ app.get('/api/payment/my-addons', async (req, res) => {
     }
 });
 
+// 💳 Stripe rail — only used by installs that didn't come from the Play
+// Store (see billingRail.kt's install-source detection on the client). Play
+// Store installs must use Play Billing per Google policy; everyone else uses
+// this instead, so the same app works for both without two separate builds.
+app.post('/api/payment/stripe/checkout', async (req, res) => {
+    try {
+        const { deviceId, addonId } = req.body;
+        if (!deviceId || !addonId) {
+            return res.status(200).json({ success: false, error: 'deviceId and addonId are required' });
+        }
+        const url = await createCheckoutSession(deviceId, addonId);
+        res.json({ success: true, url });
+    } catch (error: any) {
+        logger.error(`❌ /api/payment/stripe/checkout error: ${error.message}`);
+        res.status(200).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/api/payment/stripe/portal', async (req, res) => {
+    try {
+        const { deviceId } = req.body;
+        if (!deviceId) return res.status(200).json({ success: false, error: 'deviceId is required' });
+        const url = await createBillingPortalSession(deviceId);
+        res.json({ success: true, url });
+    } catch (error: any) {
+        logger.error(`❌ /api/payment/stripe/portal error: ${error.message}`);
+        res.status(200).json({ success: false, error: error.message });
+    }
+});
+
+// Stripe needs the untouched raw body to verify the signature — already
+// captured for every request by the express.json({verify}) call above, so
+// no separately-ordered raw-body middleware is needed here.
+app.post('/api/payment/stripe/webhook', async (req, res) => {
+    try {
+        const signature = req.headers['stripe-signature'] as string;
+        await handleStripeWebhook((req as any).rawBody, signature);
+        res.json({ received: true });
+    } catch (error: any) {
+        logger.error(`❌ /api/payment/stripe/webhook error: ${error.message}`);
+        res.status(400).send(`Webhook Error: ${error.message}`);
+    }
+});
+
+// No-login landing page the browser lands on after Stripe Checkout —
+// mirrors emergencyRoutes/meetupRoutes' renderEmergencyPage/renderMeetupPage
+// style. The app itself refreshes its add-on list via /api/payment/my-addons
+// the next time it's foregrounded; this page is just a human-readable
+// receipt for whoever is looking at the browser tab.
+app.get('/api/payment/stripe/result', (req, res) => {
+    const success = req.query.status === 'success';
+    res.send(`
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>${success ? 'Payment Complete' : 'Payment Canceled'} — Mistreal</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; justify-content: center; align-items: flex-start; min-height: 100vh; margin: 0; padding: 32px 16px; }
+        .card { background: #1e293b; padding: 32px; border-radius: 16px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.3); max-width: 480px; width: 100%; text-align: center; }
+        h1 { color: ${success ? '#16a34a' : '#f87171'}; font-size: 22px; margin: 0 0 16px; }
+        p { color: #cbd5e1; line-height: 1.5; }
+        .brand { color: #64748b; font-size: 12px; margin-top: 24px; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>${success ? '✅ Payment Complete' : '✖️ Payment Canceled'}</h1>
+        <p>${success ? 'Your add-on is now active. Return to the Mistreal app — it\'ll pick this up automatically.' : 'No charge was made. You can return to the Mistreal app and try again anytime.'}</p>
+        <p class="brand">Mistreal</p>
+    </div>
+</body>
+</html>`);
+});
+
 // ⚙️ App Config — freePlatformLimit/addons now drive the Subscription
 // screen's checklist directly from env vars (see addonCatalog.ts), replacing
 // the old single fixed-tier price/productId.
@@ -411,8 +507,31 @@ app.get('/api/config', async (req, res) => {
         productId: process.env.PRO_PRODUCT_ID || "pro_monthly_subscription",
         freeTrialDays: process.env.FREE_TRIAL_DAYS || "7",
         freePlatformLimit: parseInt(process.env.FREE_USER_PLATFORM_LIMIT || '1', 10),
-        addons: getAddonCatalog()
+        // stripeAvailable rather than the raw price ID — the client only
+        // ever needs to know whether the Stripe path exists for this
+        // add-on, never the Stripe-side identifier itself.
+        addons: getAddonCatalog().map(a => ({
+            id: a.id, label: a.label, description: a.description,
+            priceUsd: a.priceUsd, playProductId: a.playProductId,
+            stripeAvailable: a.stripePriceId !== null
+        }))
     });
+});
+
+// 📡 Watch Hub discovery — lets the Market/Meetup UI show "live now" without
+// holding a socket open just to find out a session exists. The actual
+// join/signaling happens over the '/watch' Socket.IO namespace.
+app.get('/api/watch/sessions', async (req, res) => {
+    try {
+        const { contextType, contextId } = req.query;
+        const where: any = { status: 'live' };
+        if (contextType) where.contextType = contextType;
+        if (contextId) where.contextId = contextId;
+        const sessions = await WatchSession.findAll({ where, order: [['createdAt', 'DESC']] });
+        res.json({ success: true, sessions });
+    } catch (error: any) {
+        res.status(200).json({ success: false, sessions: [], error: error.message });
+    }
 });
 
 // 🏦 Bank official-channel directory — deep-links into a bank's own
@@ -608,10 +727,10 @@ initDb().then(async () => {
         );
     }
 
-    app.listen(port, () => { console.log(`🚀 Server Running on Port ${port}`); });
+    httpServer.listen(port, () => { console.log(`🚀 Server Running on Port ${port}`); });
 }).catch(err => {
     console.error('CRITICAL: Boot process failed:', err.message);
-    app.listen(port, () => { console.log(`🚀 Emergency Mode: Server Running on Port ${port}`); });
+    httpServer.listen(port, () => { console.log(`🚀 Emergency Mode: Server Running on Port ${port}`); });
 });
 
 // 🛡️ AI CHECKPOINT: Did you update the Master System Map? If not, do it now.

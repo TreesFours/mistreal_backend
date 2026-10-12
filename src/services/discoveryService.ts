@@ -33,6 +33,15 @@ export interface DiscoveryPoi {
     category: string;
     latitude: number;
     longitude: number;
+    // Opportunistic only — Geoapify/OSM data for a POI occasionally carries
+    // one of these (website, or a contact:* tag), but most results won't
+    // have any of them at all. A result with none of these fields set is
+    // the normal case, not a bug — see businessRoutes.ts's external-search
+    // fallback for how the client is expected to treat an absent contact.
+    website?: string;
+    contactPhone?: string;
+    contactEmail?: string;
+    contactHandle?: string; // first social contact:* tag found (instagram/facebook/whatsapp/twitter), platform-agnostic
 }
 
 function resolveTags(category: string): string[] {
@@ -79,7 +88,21 @@ export const getNearbyPlaces = async (lat: number, lon: number, radius: number, 
             const name = props.name || `Unnamed ${category}`;
             const address = props.formatted || props.address_line2 || props.address_line1 || 'Address unavailable';
 
-            results.push({ name, address, category, latitude: poiLat, longitude: poiLon });
+            // Geoapify surfaces some of these at the top level of `properties`
+            // directly, and otherwise the original OSM tags live under
+            // `datasource.raw` — checked both since which one (if either)
+            // is populated varies per POI depending on how well it's tagged.
+            const raw = props.datasource?.raw || {};
+            const website = props.website || raw.website || undefined;
+            const contactPhone = props.phone || props.contact_phone || raw['contact:phone'] || raw.phone || undefined;
+            const contactEmail = props.email || raw['contact:email'] || raw.email || undefined;
+            const contactHandle =
+                raw['contact:instagram'] || raw['contact:facebook'] || raw['contact:whatsapp'] || raw['contact:twitter'] || undefined;
+
+            results.push({
+                name, address, category, latitude: poiLat, longitude: poiLon,
+                website, contactPhone, contactEmail, contactHandle
+            });
         }
 
         // De-dupe by name+coords, cap at 25

@@ -4,17 +4,41 @@ import * as admin from 'firebase-admin';
 import { getOrCreateUserInternal } from '../utils/userResolver';
 import { createAd, getNextAd, isAdDue, isEligibleForAds, trackAdEvent } from '../services/adService';
 import { Ad } from '../models/adModel';
+import { getActiveConfig, uploadFile as uploadToCloudStorage } from '../services/cloudStorageService';
 import logger from '../utils/logger';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
-export const persistToStorage = async (buffer: Buffer, contentType: string, path: string): Promise<string> => {
+const persistToFirebase = async (buffer: Buffer, contentType: string, path: string): Promise<string> => {
     const bucket = admin.storage().bucket();
     const file = bucket.file(path);
     await file.save(buffer, { metadata: { contentType } });
     await file.makePublic();
     return `https://storage.googleapis.com/${bucket.name}/${path}`;
+};
+
+/**
+ * Dispatcher: if this device has an active CloudStorageConfig (its own
+ * connected cloud account — see cloudStorageRoutes.ts), the file goes
+ * there instead of our Firebase bucket; otherwise this behaves exactly
+ * like it always has. `deviceId` is new here but every existing call site
+ * already has it in scope — this is additive, not a behavior change for
+ * anyone without a configured cloud account. A cloud-storage failure
+ * (server down, bad credentials) falls back to Firebase rather than
+ * failing the whole upload, since Firebase is the one path guaranteed to
+ * actually be configured.
+ */
+export const persistToStorage = async (deviceId: string, buffer: Buffer, contentType: string, path: string): Promise<string> => {
+    const activeConfig = await getActiveConfig(deviceId);
+    if (activeConfig) {
+        try {
+            return await uploadToCloudStorage(activeConfig, buffer, contentType, path);
+        } catch (e: any) {
+            logger.warn(`⚠️ Cloud storage upload failed for device ${deviceId}, falling back to Firebase: ${e.message}`);
+        }
+    }
+    return persistToFirebase(buffer, contentType, path);
 };
 
 router.post('/', upload.fields([{ name: 'video', maxCount: 1 }, { name: 'images', maxCount: 12 }]), async (req: Request, res: Response) => {
@@ -37,14 +61,14 @@ router.post('/', upload.fields([{ name: 'video', maxCount: 1 }, { name: 'images'
         if (mediaType === 'video') {
             const video = files?.video?.[0];
             if (!video) return res.status(200).json({ success: false, error: 'A video file is required.' });
-            videoUrl = await persistToStorage(video.buffer, video.mimetype, `ads/${businessId}/${Date.now()}.mp4`);
+            videoUrl = await persistToStorage(deviceId, video.buffer, video.mimetype, `ads/${businessId}/${Date.now()}.mp4`);
         } else if (mediaType === 'slideshow') {
             const images = files?.images || [];
             if (images.length < 6 || images.length > 12) {
                 return res.status(200).json({ success: false, error: 'A slideshow needs 6 to 12 images.' });
             }
             imageUrls = await Promise.all(
-                images.map((img, i) => persistToStorage(img.buffer, img.mimetype, `ads/${businessId}/${Date.now()}_${i}.jpg`))
+                images.map((img, i) => persistToStorage(deviceId, img.buffer, img.mimetype, `ads/${businessId}/${Date.now()}_${i}.jpg`))
             );
         } else {
             return res.status(200).json({ success: false, error: 'mediaType must be "video" or "slideshow".' });

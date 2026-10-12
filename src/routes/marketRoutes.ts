@@ -9,21 +9,35 @@ const router = Router();
 
 // A handful of majors everyone sees for free, independent of any user's own
 // alerts — mirrors the Free/Premium split already used for AI models.
+// `band` groups these for the client's three ticker rows (Market screen) —
+// forex needs no new provider wiring: Twelve Data's /quote and /time_series
+// already accept "EUR/USD"-style symbols through the exact same non-crypto
+// branch stock/commodity symbols already use in marketDataService.ts.
 const SHARED_WATCHLIST = [
-    { symbol: 'AAPL', assetClass: 'stock' },
-    { symbol: 'MSFT', assetClass: 'stock' },
-    { symbol: 'XAU/USD', assetClass: 'commodity' },
-    { symbol: 'WTI/USD', assetClass: 'commodity' },
-    { symbol: 'BTC', assetClass: 'crypto' },
-    { symbol: 'ETH', assetClass: 'crypto' }
+    { symbol: 'BTC', assetClass: 'crypto', band: 'crypto' },
+    { symbol: 'ETH', assetClass: 'crypto', band: 'crypto' },
+    { symbol: 'SOL', assetClass: 'crypto', band: 'crypto' },
+    { symbol: 'XRP', assetClass: 'crypto', band: 'crypto' },
+
+    { symbol: 'EUR/USD', assetClass: 'forex', band: 'forex' },
+    { symbol: 'GBP/USD', assetClass: 'forex', band: 'forex' },
+    { symbol: 'USD/JPY', assetClass: 'forex', band: 'forex' },
+    { symbol: 'USD/CHF', assetClass: 'forex', band: 'forex' },
+    { symbol: 'AUD/USD', assetClass: 'forex', band: 'forex' },
+    { symbol: 'USD/CAD', assetClass: 'forex', band: 'forex' },
+
+    { symbol: 'AAPL', assetClass: 'stock', band: 'tickers' },
+    { symbol: 'MSFT', assetClass: 'stock', band: 'tickers' },
+    { symbol: 'XAU/USD', assetClass: 'commodity', band: 'tickers' },
+    { symbol: 'WTI/USD', assetClass: 'commodity', band: 'tickers' }
 ];
 
 router.get('/watchlist', async (_req: Request, res: Response) => {
     try {
         const quotes = await Promise.all(
-            SHARED_WATCHLIST.map(async ({ symbol, assetClass }) => ({
+            SHARED_WATCHLIST.map(async ({ symbol, assetClass, band }) => ({
                 ...(await getQuote(symbol, assetClass)),
-                symbol, assetClass
+                symbol, assetClass, band
             }))
         );
         const available = quotes.filter(q => q.price !== undefined);

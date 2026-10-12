@@ -5,6 +5,7 @@ import { getOrCreateUserInternal } from '../utils/userResolver';
 import { sendSocialAction } from '../services/socialService';
 import { MeetupProposal } from '../models/MeetupProposal';
 import { MeetupConfirmation } from '../models/MeetupConfirmation';
+import { ComfortMeetConfirmation } from '../models/ComfortMeetConfirmation';
 import { EmergencyContact } from '../models/EmergencyContact';
 import { EmergencyAlert } from '../models/EmergencyAlert';
 import { persistToStorage } from './adRoutes';
@@ -14,6 +15,26 @@ const router = Router();
 const appUrl = () => process.env.APP_URL || 'https://mistreal-backend.onrender.com';
 const SILENT_MEETUP_WINDOW_MS = 10 * 24 * 60 * 60 * 1000; // 10 days
 const ESCALATION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000; // matches Guardian's own window
+
+// How close ('comfort' meetups only) two devices' live pings need to be,
+// and how fresh each side's most recent ping needs to be relative to the
+// other, before the backend confirms the meet jointly — see comfort-ping
+// below. Both tunable without a redeploy.
+const COMFORT_MEET_PROXIMITY_METERS = parseFloat(process.env.COMFORT_MEET_PROXIMITY_METERS || '150');
+const COMFORT_MEET_PING_WINDOW_MS = parseFloat(process.env.COMFORT_MEET_PING_WINDOW_MS || '90000');
+
+// In-memory only — a dropped/restarted server just means both sides' next
+// ping re-establishes freshness within seconds; nothing worth persisting
+// about a ping that never turned into a confirmation.
+const lastPingByMeetupDevice = new Map<string, { latitude: number; longitude: number; atMs: number }>();
+
+const distanceMeters = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+    const R = 6371000;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
 
 // Device-bound: only whoever actually created the proposal from that exact
 // device could ever have produced this token — proves "this specific
@@ -63,9 +84,18 @@ const renderMeetupPage = ({ title, body }: { title: string; body: string }): str
  */
 router.post('/', async (req: Request, res: Response) => {
     try {
-        const { deviceId, firebaseUid, businessId, counterpartyPlatform, counterpartyContactId, latitude, longitude, addressLabel, scheduledAt } = req.body;
+        const {
+            deviceId, firebaseUid, businessId, counterpartyPlatform, counterpartyContactId, counterpartyDeviceId,
+            meetupType, latitude, longitude, addressLabel, scheduledAt
+        } = req.body;
         if (!deviceId || latitude === undefined || longitude === undefined || !scheduledAt) {
             return res.status(200).json({ success: false, error: 'deviceId, latitude, longitude and scheduledAt are required' });
+        }
+        // Comfort meets are cross-checked by live location against a
+        // specific other device, not DMed to a platform contact who may
+        // not have the app at all — needs to actually know who that is.
+        if (meetupType === 'comfort' && !counterpartyDeviceId) {
+            return res.status(200).json({ success: false, error: 'counterpartyDeviceId is required for a comfort meet' });
         }
 
         const user = await getOrCreateUserInternal(deviceId, firebaseUid);
@@ -80,6 +110,8 @@ router.post('/', async (req: Request, res: Response) => {
             proposerDeviceId: deviceId,
             counterpartyPlatform: counterpartyPlatform || null,
             counterpartyContactId: counterpartyContactId || null,
+            counterpartyDeviceId: counterpartyDeviceId || null,
+            meetupType: meetupType === 'comfort' ? 'comfort' : 'business',
             latitude, longitude,
             addressLabel: addressLabel || null,
             scheduledAt,
@@ -201,7 +233,7 @@ router.post('/:id/confirm', async (req: Request, res: Response) => {
         if (photoBase64) {
             try {
                 const buffer = Buffer.from(photoBase64, 'base64');
-                photoUrl = await persistToStorage(buffer, photoMimeType || 'image/jpeg', `meetup_proof/${meetup.id}/${deviceId}_${Date.now()}.jpg`);
+                photoUrl = await persistToStorage(deviceId, buffer, photoMimeType || 'image/jpeg', `meetup_proof/${meetup.id}/${deviceId}_${Date.now()}.jpg`);
             } catch (e: any) {
                 logger.warn(`⚠️ Meetup confirmation photo upload failed (confirmation still recorded): ${e.message}`);
             }
@@ -228,6 +260,85 @@ router.post('/:id/confirm', async (req: Request, res: Response) => {
     } catch (e: any) {
         logger.error(`❌ POST /meetups/:id/confirm error: ${e.message}`);
         res.status(200).json({ success: false, error: e.message });
+    }
+});
+
+/**
+ * Live proximity check-in for a 'comfort' meetup — both sides call this
+ * repeatedly (e.g. every few seconds) while their "I'm here" screen is
+ * open. Each call records this device's current ping, then checks whether
+ * the OTHER party (proposer or counterpartyDeviceId, whichever isn't the
+ * caller) has a ping of its own fresh enough and close enough to confirm —
+ * this is the actual cross-check the original business-meetup flow never
+ * had (that one is pure self-report). Idempotent: once a
+ * ComfortMeetConfirmation row exists, every subsequent ping from either
+ * side just reports it back, it's never created twice (unique on meetupId).
+ */
+router.post('/:id/comfort-ping', async (req: Request, res: Response) => {
+    try {
+        const { deviceId, latitude, longitude } = req.body;
+        if (!deviceId || latitude === undefined || longitude === undefined) {
+            return res.status(200).json({ success: false, error: 'deviceId, latitude and longitude are required' });
+        }
+        const meetup = await MeetupProposal.findByPk(req.params.id);
+        if (!meetup) return res.status(200).json({ success: false, error: 'Meetup not found' });
+        if (meetup.meetupType !== 'comfort') {
+            return res.status(200).json({ success: false, error: 'This meetup is not a comfort meet' });
+        }
+        const otherDeviceId = deviceId === meetup.proposerDeviceId ? meetup.counterpartyDeviceId : meetup.proposerDeviceId;
+        if (deviceId !== meetup.proposerDeviceId && deviceId !== meetup.counterpartyDeviceId) {
+            return res.status(200).json({ success: false, error: 'This device is not part of this meetup' });
+        }
+
+        const existing = await ComfortMeetConfirmation.findOne({ where: { meetupId: meetup.id } });
+        if (existing) {
+            return res.json({ success: true, confirmed: true, distanceMeters: existing.distanceMeters, confirmedAt: existing.confirmedAt });
+        }
+
+        const now = Date.now();
+        lastPingByMeetupDevice.set(`${meetup.id}:${deviceId}`, { latitude, longitude, atMs: now });
+
+        const otherPing = otherDeviceId ? lastPingByMeetupDevice.get(`${meetup.id}:${otherDeviceId}`) : undefined;
+        if (!otherPing || now - otherPing.atMs > COMFORT_MEET_PING_WINDOW_MS) {
+            return res.json({ success: true, confirmed: false });
+        }
+
+        const distance = distanceMeters(latitude, longitude, otherPing.latitude, otherPing.longitude);
+        if (distance > COMFORT_MEET_PROXIMITY_METERS) {
+            return res.json({ success: true, confirmed: false, distanceMeters: distance });
+        }
+
+        const confirmation = await ComfortMeetConfirmation.create({
+            meetupId: meetup.id,
+            deviceIdA: meetup.proposerDeviceId,
+            deviceIdB: meetup.counterpartyDeviceId,
+            distanceMeters: distance
+        });
+        meetup.status = 'completed';
+        await meetup.save();
+        lastPingByMeetupDevice.delete(`${meetup.id}:${deviceId}`);
+        if (otherDeviceId) lastPingByMeetupDevice.delete(`${meetup.id}:${otherDeviceId}`);
+
+        logger.info(`💞 Comfort meet confirmed: meetup #${meetup.id}, ${distance.toFixed(0)}m apart`);
+        res.json({ success: true, confirmed: true, distanceMeters: distance, confirmedAt: confirmation.confirmedAt });
+    } catch (e: any) {
+        logger.error(`❌ POST /meetups/:id/comfort-ping error: ${e.message}`);
+        res.status(200).json({ success: false, error: e.message });
+    }
+});
+
+// Personal stat — shown as a distinct badge/count from a business's
+// confirmed-meetups trust counter, never mixed with it.
+router.get('/comfort-count', async (req: Request, res: Response) => {
+    try {
+        const deviceId = req.query.deviceId as string;
+        if (!deviceId) return res.status(200).json({ success: false, count: 0, error: 'deviceId required' });
+        const count = await ComfortMeetConfirmation.count({
+            where: { [Op.or]: [{ deviceIdA: deviceId }, { deviceIdB: deviceId }] }
+        });
+        res.json({ success: true, count });
+    } catch (e: any) {
+        res.status(200).json({ success: false, count: 0, error: e.message });
     }
 });
 

@@ -213,6 +213,39 @@ router.get('/callback/success', async (req: Request, res: Response) => {
 /**
  * 3. CONTACTS FEED
  */
+/**
+ * Social stats (followers/friends/likes) for a profile shown on the new
+ * Review feature's owner profile screen — note this looks up WHOEVER's
+ * deviceId is passed, not necessarily the caller's own device, since the
+ * profile being viewed usually belongs to someone else. Uses
+ * ZernioAdapter.fetchFollowerStats, an unconfirmed-but-attempted endpoint
+ * (see that function's own comment) — always returns `available: false`
+ * per account rather than erroring when Zernio can't actually provide it,
+ * so the profile screen can render nothing instead of breaking.
+ */
+router.get('/social-stats', async (req: Request, res: Response) => {
+    try {
+        const deviceId = req.query.deviceId as string;
+        if (!deviceId) return res.status(200).json({ success: false, stats: [], error: 'deviceId required' });
+
+        const user = await User.findOne({ where: { deviceId } });
+        if (!user?.zernioProfileId) return res.json({ success: true, stats: [] });
+
+        const accounts = await ZernioAdapter.fetchAccounts(user.zernioProfileId);
+        const stats = await Promise.all(
+            (accounts || []).map(async (account: any) => {
+                const accountId = account.id || account._id || account.accountId;
+                const result = await ZernioAdapter.fetchFollowerStats(user.zernioProfileId!, accountId);
+                return { platform: account.platform, ...result };
+            })
+        );
+        res.json({ success: true, stats: stats.filter(s => s.available) });
+    } catch (e: any) {
+        logger.error(`❌ GET /social-stats error: ${e.message}`);
+        res.status(200).json({ success: false, stats: [], error: e.message });
+    }
+});
+
 router.get('/contacts', optionalAuthenticateUser, async (req: Request, res: Response) => {
     try {
         const user = await getResolvedUser(req);

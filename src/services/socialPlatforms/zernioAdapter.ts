@@ -389,6 +389,38 @@ export const ZernioAdapter = {
   },
 
   /**
+   * Follower/friend/like counts for a connected account — UNCONFIRMED
+   * endpoint. Zernio's analytics docs page references
+   * `/v1/accounts/follower-stats` for exactly this, but that endpoint's own
+   * docs page 404'd on direct fetch and it isn't listed in the main nav —
+   * plausible, not verified. Attempted the same defensive way every other
+   * call in this file already is: try the real call, and on ANY failure
+   * (404, wrong shape, auth error) return `{ available: false }` rather
+   * than a fake zero presented as real data. Never let the profile screen
+   * depend on this succeeding.
+   */
+  fetchFollowerStats: async (profileId: string, accountId: string): Promise<{ available: boolean; followers?: number; friends?: number; likes?: number }> => {
+    try {
+      if (!profileId || !accountId) return { available: false };
+      const response = await axios.get(`${ZERNIO_API_URL}/accounts/follower-stats`, {
+        params: { profileId, accountId },
+        headers: { 'Authorization': `Bearer ${getApiKey()}` }
+      });
+      const data = response.data?.stats || response.data?.data || response.data;
+      if (!data || typeof data !== 'object') return { available: false };
+      return {
+        available: true,
+        followers: typeof data.followers === 'number' ? data.followers : undefined,
+        friends: typeof data.friends === 'number' ? data.friends : undefined,
+        likes: typeof data.likes === 'number' ? data.likes : undefined
+      };
+    } catch (e: any) {
+      console.warn(`Zernio follower-stats unavailable [${accountId}]: ${e.response?.status || e.message}`);
+      return { available: false };
+    }
+  },
+
+  /**
    * Register (or confirm) our webhook subscription with Zernio — confirmed
    * real endpoints via docs.zernio.com's OpenAPI spec: POST/GET /webhooks.
    * The receiver side (webhookRoutes.ts / WebhookService) already existed

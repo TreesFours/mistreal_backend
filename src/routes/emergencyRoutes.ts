@@ -249,7 +249,7 @@ router.post('/alerts', async (req: Request, res: Response) => {
         if (sosAudioBase64) {
             try {
                 const buffer = Buffer.from(sosAudioBase64, 'base64');
-                sosAudioUrl = await persistToStorage(buffer, sosAudioMimeType || 'audio/mp4', `sos_audio/${deviceId}/${Date.now()}.m4a`);
+                sosAudioUrl = await persistToStorage(deviceId, buffer, sosAudioMimeType || 'audio/mp4', `sos_audio/${deviceId}/${Date.now()}.m4a`);
             } catch (e: any) {
                 logger.warn(`⚠️ SOS audio upload failed (alert still created): ${e.message}`);
             }
@@ -319,7 +319,7 @@ router.patch('/alerts/:id/audio', async (req: Request, res: Response) => {
         if (!sosAudioBase64) return res.status(200).json({ success: false, error: 'sosAudioBase64 is required' });
 
         const buffer = Buffer.from(sosAudioBase64, 'base64');
-        alert.sosAudioUrl = await persistToStorage(buffer, sosAudioMimeType || 'audio/mp4', `sos_audio/${deviceId}/${Date.now()}.m4a`);
+        alert.sosAudioUrl = await persistToStorage(deviceId, buffer, sosAudioMimeType || 'audio/mp4', `sos_audio/${deviceId}/${Date.now()}.m4a`);
         await alert.save();
         res.json({ success: true, alert });
     } catch (e: any) {
