@@ -36,7 +36,8 @@ export const GeminiProvider: AiProvider = {
                 }));
 
                 const currentParts: any[] = [{ text: req.prompt }];
-                if (req.imageDatas) req.imageDatas.forEach((d) => currentParts.push({ inline_data: { mime_type: 'image/jpeg', data: d } }));
+                if (req.imageDatas) req.imageDatas.forEach((d, i) =>
+                    currentParts.push({ inline_data: { mime_type: req.imageMimeTypes?.[i] || 'image/jpeg', data: d } }));
                 // The app's recorder actually produces AAC audio (M4A container), not MP3 —
                 // telling Gemini it's audio/mp3 when the bytes are AAC risks it failing to
                 // decode the clip correctly.

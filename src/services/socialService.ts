@@ -143,11 +143,16 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
         const communityPlatforms: string[] = user.preferences?.communityFeedPlatforms || [];
         if (communityPlatforms.length > 0) {
             try {
+                // 'mistreal'-tagged posts (see sendSocialAction's mistrealOnly
+                // branch) aren't about any specific external platform
+                // preference, so they're always included once the viewer has
+                // opted into the Community Feed at all, not gated behind a
+                // separate platform-style opt-in of their own.
                 const communityPosts = await CommunityPost.findAll({
                     where: {
                         visibility: 'public_app',
                         authorDeviceId: { [Op.ne]: user.deviceId },
-                        platform: { [Op.in]: communityPlatforms.map((p: string) => normalizePlatformId(p)) }
+                        platform: { [Op.in]: [...communityPlatforms.map((p: string) => normalizePlatformId(p)), 'mistreal'] }
                     },
                     order: [['createdAt', 'DESC']],
                     limit: 30
@@ -197,7 +202,13 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
             // platforms), so the split has to happen here instead.
             if (it.type === 'message') continue;
             try {
-                const def = getPlatformDefinition(it.platform);
+                // 'mistreal' is a pseudo-platform (see sendSocialAction's
+                // mistrealOnly branch) — deliberately not in
+                // platformRegistry.ts, since it's not a real connectable
+                // account, just this one display fallback.
+                const def = it.platform === 'mistreal'
+                    ? { icon: '🏴', color: '#8B5CF6', displayName: 'Mistreal' }
+                    : getPlatformDefinition(it.platform);
 
                 // Extract image/video from attachments if available
                 const rawAttachments = it.content?.attachments || it.metadata?.attachments || [];
@@ -229,7 +240,11 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
                     commentsCount: it.metadata?.comments_count || 0,
                     likes: it.metadata?.likes_count || 0,
                     comments: it.metadata?.comments || [],
-                    isCommunityPost: it.metadata?.isCommunityPost === true
+                    isCommunityPost: it.metadata?.isCommunityPost === true,
+                    // Only a Community Feed post's author id is a real Mistreal
+                    // deviceId — an external platform's author.id is platform-scoped
+                    // and must never be treated as one.
+                    authorDeviceId: it.metadata?.isCommunityPost === true ? (it.author?.id || null) : null
                 });
             } catch (itemError: any) {
                 console.error(`[SYNC] Skipping one post that failed to render: ${itemError.message}`, it);
@@ -453,10 +468,43 @@ const isPublishAction = (type: string): boolean => {
 
 export const sendSocialAction = async (
     user: User,
-    action: { platform: string, type: string, content: string, targetId?: string, mediaUrl?: string, shareToCommunity?: boolean }
+    action: { platform: string, type: string, content: string, targetId?: string, mediaUrl?: string, shareToCommunity?: boolean, mistrealOnly?: boolean }
 ) => {
+    // Never touches Zernio/an external account at all — no connected
+    // platform required. Tagged with the pseudo-platform 'mistreal' (not a
+    // real entry in platformRegistry.ts, never shows as "connectable") so
+    // getFeed's Community Feed query can always include it for any viewer
+    // who has opted into at least one platform there, rather than requiring
+    // a separate specific opt-in for something that isn't an external
+    // platform preference in the first place (see socialService.ts's feed
+    // query below).
+    if (action.mistrealOnly === true) {
+        await CommunityPost.create({
+            authorDeviceId: user.deviceId,
+            authorDisplayName: user.userName || 'A Mistreal user',
+            platform: 'mistreal',
+            content: action.content,
+            imageUrl: action.mediaUrl || null,
+            videoUrl: null,
+            sourceUrl: null,
+            visibility: 'public_app'
+        });
+        return { success: true };
+    }
+
     if (!user.zernioProfileId) throw new Error('Connect your social profile first.');
-    const result = await ZernioAdapter.sendAction(user.zernioProfileId, action.platform, action.content, action.type, action.targetId, action.mediaUrl);
+
+    // Cross-promotional attribution tag on content actually leaving the app
+    // — only for a real publish (matches isPublishAction's existing use
+    // below, never a DM/like/comment), so a post carries both names
+    // wherever it ends up. The in-app Community Feed copy below stays
+    // untagged (action.content, not outgoingContent) since it already gets
+    // its own "· via Mistreal" badge rendered client-side.
+    const outgoingContent = isPublishAction(action.type)
+        ? `${action.content}\n\n📍 via Mistreal → ${getPlatformDefinition(action.platform)?.displayName || action.platform}`
+        : action.content;
+
+    const result = await ZernioAdapter.sendAction(user.zernioProfileId, action.platform, outgoingContent, action.type, action.targetId, action.mediaUrl);
 
     // Opt-in, per-post, never retroactive — the author explicitly chose this
     // at send time. A failure here must never surface as a failed post send.

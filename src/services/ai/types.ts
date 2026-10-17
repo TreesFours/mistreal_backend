@@ -12,6 +12,7 @@ export interface ProviderChatRequest {
     modelCandidates?: string[]; // ordered failover list (curated/app-key path only)
     baseUrl?: string;        // BYOK-only: custom OpenAI-compatible endpoint
     imageDatas?: string[];
+    imageMimeTypes?: string[]; // parallel to imageDatas — real per-attachment mime type; falls back to 'image/jpeg' when absent
     audioData?: string;
 }
 

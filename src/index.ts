@@ -17,8 +17,8 @@ import morgan from 'morgan';
 import multer from 'multer';
 import dotenv from 'dotenv';
 import { Op } from 'sequelize';
-import { getAiResponse, getAvailableModels, extractImageData, extractAudioData, extractVideoData } from './services/aiService';
-import { getSocialSummary, createConnectSession, sendSocialAction, reconcileUserPlatforms } from './services/socialService';
+import { getAiResponse, getAvailableModels, extractImageData, extractAttachmentData, extractAudioData, extractVideoData, DOMAIN_PROVIDER_IDS } from './services/aiService';
+import { getSocialSummary, createConnectSession, sendSocialAction } from './services/socialService';
 import { getWeatherData } from './services/weatherService';
 import { getDetailedAstroData } from './services/astroService';
 import { IntelligenceService } from './services/intelligenceService';
@@ -30,6 +30,7 @@ import { EmailMessage } from './models/EmailMessage'; // imported for Sequelize 
 import { AiProviderConfig } from './models/AiProviderConfig'; // same — registration only
 import { Business } from './models/businessModel'; // same — registration only
 import { Ad, AdEvent } from './models/adModel'; // same — registration only
+import { sendMonthlyReportEmail } from './utils/mailer';
 import { CommunityPost } from './models/communityModel'; // same — registration only
 import { CachedYoutubeVideo } from './models/youtubeVideoModel'; // same — registration only
 import { refreshCuratedVideos, getCachedVideos } from './services/youtubeService';
@@ -41,6 +42,7 @@ import businessRoutes from './routes/businessRoutes';
 import meetupRoutes, { sweepSilentMeetups } from './routes/meetupRoutes';
 import reviewRoutes from './routes/reviewRoutes';
 import cloudStorageRoutes from './routes/cloudStorageRoutes';
+import needRoutes from './routes/needRoutes';
 import adRoutes from './routes/adRoutes';
 import { ZernioAdapter } from './services/socialPlatforms/zernioAdapter';
 import { getLocationPhoto } from './services/locationPhotoService';
@@ -66,12 +68,15 @@ import { ReviewThreadMessage } from './models/ReviewThreadMessage'; // same — 
 import { ReviewThreadParticipant } from './models/ReviewThreadParticipant'; // same — registration only
 import { ReviewThreadInvite } from './models/ReviewThreadInvite'; // same — registration only
 import { CloudStorageConfig } from './models/CloudStorageConfig'; // same — registration only
+import { UserSkill } from './models/UserSkill'; // same — registration only
+import { NeedPost } from './models/NeedPost'; // same — registration only
 import { UserAddon } from './models/UserAddon';
 import { getAddonCatalog, getAddonByPlayProductId } from './services/addonCatalog';
 import { recomputeIsPro, hasAddon } from './services/addonService';
 import { createCheckoutSession, handleStripeWebhook, createBillingPortalSession } from './services/stripeService';
 import { WatchSession } from './models/WatchSession'; // imported for Sequelize registration — table is created by sequelize.sync below
 import { registerWatchSignaling } from './services/watchSignalingService';
+import { renderWatchViewerPage } from './utils/watchViewerPage';
 import logger from './utils/logger';
 
 dotenv.config();
@@ -135,6 +140,7 @@ app.use('/api/business', businessRoutes);
 app.use('/api/meetups', meetupRoutes);
 app.use('/api/reviews', reviewRoutes);
 app.use('/api/cloud-storage', cloudStorageRoutes);
+app.use('/api/needs', needRoutes);
 app.use('/api/ads', adRoutes);
 app.use('/api/markets', marketRoutes);
 
@@ -151,9 +157,29 @@ app.get('/media/:id', (req, res) => {
     res.send(media.buffer);
 });
 
+// 📺 Universal Watch Hub viewer — a plain-browser counterpart to
+// WatchViewerScreen.kt, so a Watch Hub host can cast to literally any
+// device with a browser (a computer, a smart TV, anything), not only
+// another Mistreal app. Speaks the exact same watchSignalingService.ts
+// '/watch' Socket.IO protocol a native viewer does — join, receive an
+// offer, answer, exchange ICE — using the browser's own native
+// RTCPeerConnection instead of stream-webrtc-android. No app install, no
+// account; the sessionId from WatchHostScreen's share code is the only
+// credential needed. Validated as hex since it's echoed into the page.
+app.get('/watch/:sessionId', (req, res) => {
+    const sessionId = req.params.sessionId;
+    if (!/^[a-f0-9]+$/i.test(sessionId)) return res.status(400).send('Invalid session code');
+    // helmet()'s default CSP (script-src 'self', no inline) would otherwise
+    // silently block this page's inline WebRTC/Socket.IO script — relaxed
+    // only on this one route, not globally.
+    res.removeHeader('Content-Security-Policy');
+    res.set('Content-Type', 'text/html');
+    res.send(renderWatchViewerPage(sessionId));
+});
+
 // 🧠 AI Chat
 app.post('/api/chat', upload.fields([{ name: 'images', maxCount: 5 }, { name: 'audio', maxCount: 1 }, { name: 'video', maxCount: 1 }]), validate(chatSchema), async (req, res) => {
-    let { prompt, provider, history, deviceId, firebaseUid, contextMetadata, imageRoles } = req.body;
+    let { prompt, provider, history, deviceId, firebaseUid, contextMetadata, imageRoles, confirmArchRender, archUnderstanding } = req.body;
     const files = req.files as { images?: Express.Multer.File[], audio?: Express.Multer.File[], video?: Express.Multer.File[] };
 
     if (typeof history === 'string') {
@@ -165,6 +191,9 @@ app.post('/api/chat', upload.fields([{ name: 'images', maxCount: 5 }, { name: 'a
     if (typeof imageRoles === 'string') {
         try { imageRoles = JSON.parse(imageRoles); } catch (e) { imageRoles = undefined; }
     }
+    // Multipart fields always arrive as strings — "true"/"false", never a
+    // real boolean, same reason imageRoles needs its own JSON.parse above.
+    confirmArchRender = confirmArchRender === true || confirmArchRender === 'true';
 
     const user = await getOrCreateUserInternal(deviceId, firebaseUid);
 
@@ -172,7 +201,14 @@ app.post('/api/chat', upload.fields([{ name: 'images', maxCount: 5 }, { name: 'a
         return res.status(400).json({ success: false, error: 'Prompt or audio is required' });
     }
 
-    const imageDatas = files?.images?.map(extractImageData) || [];
+    // A domain-config flow (Architectural Render etc.) allows PDFs alongside
+    // images — every other caller still only ever gets 'image/jpeg' bytes,
+    // same as before this existed, so nothing else needs to change.
+    const isDomainFlow = provider && DOMAIN_PROVIDER_IDS.has(provider);
+    const imageAttachments = (files?.images || []).map((f) =>
+        isDomainFlow ? extractAttachmentData(f) : { base64: extractImageData(f), mimeType: 'image/jpeg' });
+    const imageDatas = imageAttachments.map((a) => a.base64);
+    const imageMimeTypes = imageAttachments.map((a) => a.mimeType);
     const audioData = files?.audio?.[0] ? extractAudioData(files.audio[0]) : undefined;
     const videoData = files?.video?.[0] ? extractVideoData(files.video[0]) : undefined;
 
@@ -181,7 +217,7 @@ app.post('/api/chat', upload.fields([{ name: 'images', maxCount: 5 }, { name: 'a
         enhancedPrompt = `[CONTEXT: ${contextMetadata}]\n\nUser Question: ${prompt}`;
     }
 
-    const response = await getAiResponse(enhancedPrompt, provider || 'gemini-1.5-flash', history || [], user, imageDatas, audioData, videoData, imageRoles);
+    const response = await getAiResponse(enhancedPrompt, provider || 'gemini-1.5-flash', history || [], user, imageDatas, audioData, videoData, imageRoles, confirmArchRender, archUnderstanding, imageMimeTypes);
 
     // 🛡️ AI NOTE: If you overhaul or fix logic here, log it in the "History & Notes" column of the Master Map.
     res.json(response);
@@ -646,51 +682,19 @@ setInterval(async () => {
     } catch (err: any) {}
 }, 60000);
 
-// 🆘 Guardian escalation sweep: an active EmergencyAlert past its 30-day
-// escalateAt with zero confirmed-contact responses auto-posts to the
-// owner's own connected platforms. Must run server-side (not client
-// WorkManager) since it has to fire even if the triggering phone is off —
-// that's the entire point of an emergency escalation. Checked hourly, not
-// every minute like the DelayedAction sweep above — a 30-day deadline has
-// no need for minute-level precision.
-setInterval(async () => {
-    if (!DATABASE_URL) return;
-    try {
-        const overdue = await EmergencyAlert.findAll({
-            where: { status: 'active', escalateAt: { [Op.lte]: new Date() } }
-        });
-        for (const alert of overdue) {
-            const responseCount = await EmergencyAlertResponse.count({ where: { alertId: alert.id } });
-            if (responseCount > 0) {
-                // Someone responded since this was last checked — resolving
-                // here just means "don't escalate", not "confirmed safe";
-                // the owner or a contact can still mark it resolved properly.
-                continue;
-            }
-            const user = await User.findOne({ where: { deviceId: alert.ownerDeviceId } });
-            if (!user) continue;
-            try {
-                const connected = await reconcileUserPlatforms(user);
-                const mapsLink = `https://www.google.com/maps?q=${alert.latitude},${alert.longitude}`;
-                const message = `🆘 Unconfirmed SOS alert from ${user.userName || 'a Mistreal user'} — no emergency contact has responded in 30 days. Last known location: ${mapsLink}${alert.sosAudioUrl ? ` — audio: ${alert.sosAudioUrl}` : ''} — sent via Mistreal.`;
-                await Promise.allSettled(
-                    connected.map((platform: string) => sendSocialAction(user, { platform, type: 'Post', content: message }))
-                );
-                logger.info(`🆘 Escalated unconfirmed alert ${alert.id} (device ${alert.ownerDeviceId}) to [${connected.join(', ')}]`);
-            } catch (e: any) {
-                logger.error(`❌ Escalation broadcast failed for alert ${alert.id}: ${e.message}`);
-            }
-            alert.status = 'escalated_public';
-            await alert.save();
-        }
-    } catch (err: any) {
-        logger.error(`❌ Guardian Escalation Sweep Error: ${err.message}`);
-    }
-}, 60 * 60 * 1000); // Hourly
+// 🆘 The old Guardian escalation sweep (an active EmergencyAlert past its
+// 30-day escalateAt auto-posting to the OWNER'S OWN connected platforms)
+// was removed here — it helped no one if the owner is actually missing,
+// since it posted to their own disconnected accounts. Replaced by the
+// community-broadcast tiers on GET /api/emergency/nearby-sos
+// (emergencyRoutes.ts) — a live read-time check against
+// nextCommunityBroadcastAt/fullDetailAt, not a one-time sweep side effect,
+// so no interval is needed for it.
 
-// 🤝 Silent-meetup sweep: a scheduled meetup nobody confirmed 10 days after
-// the fact raises a real Guardian alert (see meetupRoutes.ts) rather than
-// a second, parallel notification system.
+// 🤝 Silent-meetup sweep: a scheduled meetup nobody confirmed 4 days after
+// the fact raises a real Guardian alert AND notifies confirmed contacts
+// immediately (see meetupRoutes.ts) rather than a second, parallel
+// notification system.
 setInterval(async () => {
     if (!DATABASE_URL) return;
     try {
@@ -699,6 +703,59 @@ setInterval(async () => {
         logger.error(`❌ Silent Meetup Sweep Error: ${err.message}`);
     }
 }, 60 * 60 * 1000); // Hourly
+
+// 📊 Monthly operator report: new/total user counts + per-business ad
+// engagement, mailed to REPORT_EMAIL_TO. Checked hourly (matches the other
+// sweeps' cadence) but only actually sends once, the first time this
+// process observes the 1st of a new month — monthKey guard is in-memory
+// only, same lightweight style as the rest of this codebase's ephemeral
+// trackers (e.g. meetupRoutes.ts's ping map); a restart right at the
+// boundary just means it might send once more, never a real problem for a
+// once-a-month, mail-to-self report.
+let lastMonthlyReportMonthKey: number | null = null;
+setInterval(async () => {
+    if (!DATABASE_URL) return;
+    const now = new Date();
+    if (now.getDate() !== 1) return;
+    const monthKey = now.getFullYear() * 12 + now.getMonth();
+    if (lastMonthlyReportMonthKey === monthKey) return;
+    lastMonthlyReportMonthKey = monthKey;
+
+    try {
+        const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        const [newUserCount, totalUserCount, adEvents, ads, businesses] = await Promise.all([
+            User.count({ where: { createdAt: { [Op.gte]: thirtyDaysAgo } } }),
+            User.count(),
+            AdEvent.findAll({ where: { createdAt: { [Op.gte]: thirtyDaysAgo } } }),
+            Ad.findAll(),
+            Business.findAll({ attributes: ['businessId', 'name'] })
+        ]);
+
+        const adById = new Map(ads.map(a => [a.id, a]));
+        const nameByBusinessId = new Map(businesses.map(b => [b.businessId, b.name]));
+        const statsByBusiness = new Map<string, { businessName: string; impressions: number; engagedClicks: number }>();
+
+        for (const event of adEvents) {
+            const ad = adById.get(event.adId);
+            if (!ad) continue;
+            const entry = statsByBusiness.get(ad.businessId) || {
+                businessName: nameByBusinessId.get(ad.businessId) || ad.businessId,
+                impressions: 0, engagedClicks: 0
+            };
+            if (event.eventType === 'impression') entry.impressions++;
+            else if (event.eventType === 'engaged_click') entry.engagedClicks++;
+            statsByBusiness.set(ad.businessId, entry);
+        }
+
+        await sendMonthlyReportEmail(
+            newUserCount,
+            totalUserCount,
+            Array.from(statsByBusiness.entries()).map(([businessId, v]) => ({ businessId, ...v }))
+        );
+    } catch (err: any) {
+        logger.error(`❌ Monthly Report Error: ${err.message}`);
+    }
+}, 60 * 60 * 1000); // Hourly check, only sends on the 1st
 
 // 🔍 404 Catch-all
 app.use((req, res) => {

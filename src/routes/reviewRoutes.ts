@@ -12,15 +12,38 @@ const router = Router();
 
 const REVIEW_HOLD_BACK_MS = parseFloat(process.env.REVIEW_HOLD_BACK_MS || String(24 * 60 * 60 * 1000)); // 24h
 const REVIEW_REPLY_EXTENSION_MS = parseFloat(process.env.REVIEW_REPLY_EXTENSION_MS || String(14 * 24 * 60 * 60 * 1000)); // 14 days
+// Hiding is a ceiling on suppression, not real deletion — a hidden review
+// comes back on its own after this long regardless of exchange count.
+const REVIEW_MAX_HIDE_MS = parseFloat(process.env.REVIEW_MAX_HIDE_MS || String(14 * 24 * 60 * 60 * 1000)); // 14 days
+// Reaching this many replies between ONLY the original reviewer/reviewee
+// (never an invited 3rd party) force-unhides immediately and opens the
+// thread to public commenting — see POST /:id/reply.
+const REVIEW_PUBLIC_COMMENT_THRESHOLD = 3;
 
-// A 'pending' review becomes visible once publishAt passes — computed here
-// rather than via a background sweep, since nothing time-sensitive needs to
-// fire the instant that moment arrives (the reviewee's notice already
-// happened at creation; this is just a read-time visibility check).
+// A 'pending' review becomes visible once publishAt passes, and a 'hidden'
+// one becomes visible again once REVIEW_MAX_HIDE_MS has passed since
+// hiddenAt — both computed here rather than via a background sweep, since
+// nothing time-sensitive needs to fire the instant either moment arrives.
+// 'deleted' is never visible, regardless of any timer.
 const isEffectivelyVisible = (review: Review): boolean => {
-    if (review.status === 'hidden') return false;
+    if (review.status === 'deleted') return false;
     if (review.status === 'published') return true;
+    if (review.status === 'hidden') {
+        return !!review.hiddenAt && (Date.now() - review.hiddenAt.getTime()) >= REVIEW_MAX_HIDE_MS;
+    }
     return review.status === 'pending' && review.publishAt.getTime() <= Date.now();
+};
+
+// Strips the original content for a deleted review and substitutes the
+// tombstone reason — the row itself is never destroyed, this is just what
+// gets shown. Every other status passes through untouched.
+const toPublicReview = (review: Review) => {
+    const json = review.toJSON() as any;
+    if (review.status === 'deleted') {
+        json.contentText = null;
+        json.voiceUrl = null;
+    }
+    return json;
 };
 
 router.post('/', async (req: Request, res: Response) => {
@@ -88,7 +111,7 @@ router.get('/', async (req: Request, res: Response) => {
         const revieweeDeviceId = req.query.revieweeDeviceId as string;
         if (!revieweeDeviceId) return res.status(200).json({ success: false, reviews: [], error: 'revieweeDeviceId required' });
         const all = await Review.findAll({ where: { revieweeDeviceId }, order: [['createdAt', 'DESC']] });
-        res.json({ success: true, reviews: all.filter(isEffectivelyVisible) });
+        res.json({ success: true, reviews: all.filter(isEffectivelyVisible).map(toPublicReview) });
     } catch (e: any) {
         res.status(200).json({ success: false, reviews: [], error: e.message });
     }
@@ -108,6 +131,30 @@ router.post('/:id/hide', async (req: Request, res: Response) => {
         res.json({ success: true });
     } catch (e: any) {
         logger.error(`❌ POST /reviews/:id/hide error: ${e.message}`);
+        res.status(200).json({ success: false, error: e.message });
+    }
+});
+
+// Real permanent removal, unlike /hide — the original content is gone
+// from every response from here on (toPublicReview strips it), but the row
+// itself is kept forever as a record, never destroyed.
+router.post('/:id/delete', async (req: Request, res: Response) => {
+    try {
+        const { deviceId, reason } = req.body;
+        if (!reason || !String(reason).trim()) {
+            return res.status(200).json({ success: false, error: 'A reason is required to delete a review' });
+        }
+        const review = await Review.findByPk(req.params.id);
+        if (!review) return res.status(200).json({ success: false, error: 'Review not found' });
+        if (deviceId !== review.revieweeDeviceId) {
+            return res.status(200).json({ success: false, error: 'Only the reviewee can delete a review' });
+        }
+        review.status = 'deleted';
+        review.deletedReason = String(reason).trim();
+        await review.save();
+        res.json({ success: true, review: toPublicReview(review) });
+    } catch (e: any) {
+        logger.error(`❌ POST /reviews/:id/delete error: ${e.message}`);
         res.status(200).json({ success: false, error: e.message });
     }
 });
@@ -135,9 +182,15 @@ router.post('/:id/reply', async (req: Request, res: Response) => {
         const review = await Review.findByPk(req.params.id);
         if (!review) return res.status(200).json({ success: false, error: 'Review not found' });
 
-        const isParticipant = await ReviewThreadParticipant.findOne({ where: { reviewId: review.id, deviceId } });
-        if (!isParticipant) {
-            return res.status(200).json({ success: false, error: 'This device is not part of this review thread' });
+        // Before 3 reviewer/reviewee exchanges, only actual thread
+        // participants can post — once publiclyCommentable flips on, any
+        // device can comment (still read-only for everyone before that,
+        // same as a review's content itself once simply published).
+        if (!review.publiclyCommentable) {
+            const isParticipant = await ReviewThreadParticipant.findOne({ where: { reviewId: review.id, deviceId } });
+            if (!isParticipant) {
+                return res.status(200).json({ success: false, error: 'This device is not part of this review thread yet' });
+            }
         }
 
         const message = await ReviewThreadMessage.create({ reviewId: review.id, senderDeviceId: deviceId, contentText });
@@ -150,9 +203,20 @@ router.post('/:id/reply', async (req: Request, res: Response) => {
             const currentExpiry = review.expiresAt?.getTime() ?? 0;
             if (extendedTo.getTime() > currentExpiry) {
                 review.expiresAt = extendedTo;
-                await review.save();
             }
         }
+
+        // Only a message from one of the two ORIGINAL parties counts toward
+        // the 3-exchange threshold — an invited 3rd party (or, once public,
+        // a random commenter) replying doesn't move this forward.
+        if (deviceId === review.reviewerDeviceId || deviceId === review.revieweeDeviceId) {
+            review.exchangeCount += 1;
+            if (review.exchangeCount >= REVIEW_PUBLIC_COMMENT_THRESHOLD) {
+                review.publiclyCommentable = true;
+                if (review.status === 'hidden') review.status = 'published';
+            }
+        }
+        await review.save();
 
         res.json({ success: true, message });
     } catch (e: any) {

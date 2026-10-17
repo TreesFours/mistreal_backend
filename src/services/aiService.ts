@@ -11,6 +11,7 @@ import { ImageGenProvider } from './ai/imageGenProvider';
 import { AiProviderConfig } from '../models/AiProviderConfig';
 import { storeMediaBase64, buildMediaUrl } from '../utils/mediaStore';
 import { hasAddon } from './addonService';
+import { checkDomainRateLimit } from '../utils/domainRateLimiter';
 
 const GOOGLE_AI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 
@@ -34,6 +35,59 @@ export const IMAGE_GEN_MODEL_ID = 'imagen-3.0-generate-002';
 export const VIDEO_GEN_MODEL_ID = 'veo-3.1-generate-preview';
 export const IMAGE_EDIT_MODEL_ID = 'gemini-2.5-flash-image';
 export const VIDEO_EDIT_PROVIDER_ID = 'byok-video-edit';
+// Clarify-then-render image assistants — always use the app's own Gemini
+// key for their vision step (see getAiResponse's DOMAIN_CONFIGS branch
+// below), since that's the only chat provider in this codebase that
+// actually sends attached image bytes to the model at all; BYOK
+// OpenAI/Anthropic silently drop them (see
+// openAiCompatibleProvider.ts/anthropicProvider.ts).
+export const ARCH_IMAGE_PROVIDER_ID = 'mistreal-architect';
+
+const ARCH_IMAGE_SYSTEM_INSTRUCTION = `You are Mistreal AI's architectural render assistant.
+The user wants a rendered image of a building, room, or floor plan, possibly starting from a rough sketch, photo, or PDF they attached.
+
+RULES:
+- If you don't have enough detail to render something meaningful (room count, approximate dimensions, 2D floor-plan vs. 3D-style view, overall style), ask ONE concise clarifying question. Do not generate an image yet.
+- On every reply, restate your current understanding of the request as a single tag, exactly in this form (valid JSON, one line): [DOMAIN_UNDERSTANDING: {"rooms": <number or null>, "dimensions": "<string or null>", "scale": "2D floor plan" or "3D-style view", "style": "<string or null>", "confirmed": false}]
+- Fill in your best guess for any field the user hasn't stated yet rather than leaving everything null — the user can see and correct your guess.
+- Never set "confirmed": true yourself — that only happens when the user explicitly confirms via the app's own UI, which will tell you so directly in a follow-up message.
+- If a follow-up message tells you the user confirmed the current understanding and wants the image generated, acknowledge briefly and mention plainly that what follows is a styled concept render informed by the stated measurements, NOT a precision CAD or architectural blueprint drawing — real-world construction should never rely on it for exact measurements.
+- Keep every reply to 1-3 short sentences outside of the tag.`;
+
+/**
+ * Describe → clarify → generate domains. Architecture is the only real
+ * entry today — this map exists so a future domain (e.g. a medical-image
+ * flow) is just one more object literal here, with zero changes needed
+ * anywhere else: getAiResponse's branch, getAvailableModels' catalog
+ * entries, and the client's [DOMAIN_UNDERSTANDING] tag/card are all already
+ * generic over whatever's in this map.
+ */
+interface DomainConfig {
+    id: string;
+    displayName: string;
+    requiresAddon?: string;
+    systemInstruction: string;
+    buildRenderPrompt: (understanding: any, rawPrompt: string) => string;
+}
+
+const DOMAIN_CONFIGS: Record<string, DomainConfig> = {
+    [ARCH_IMAGE_PROVIDER_ID]: {
+        id: ARCH_IMAGE_PROVIDER_ID,
+        displayName: 'Architectural Render',
+        requiresAddon: 'ai_pro',
+        systemInstruction: ARCH_IMAGE_SYSTEM_INSTRUCTION,
+        buildRenderPrompt: (understanding, prompt) => [
+            'Architectural concept render, not a precision CAD drawing.',
+            understanding.scale ? `View: ${understanding.scale}.` : '',
+            understanding.rooms ? `${understanding.rooms} rooms.` : '',
+            understanding.dimensions ? `Approximate dimensions: ${understanding.dimensions}.` : '',
+            understanding.style ? `Style: ${understanding.style}.` : '',
+            prompt
+        ].filter(Boolean).join(' ')
+    }
+};
+
+export const DOMAIN_PROVIDER_IDS = new Set(Object.keys(DOMAIN_CONFIGS));
 
 // 📦 Professional Multipart File Handlers
 export const extractImageData = (file: Express.Multer.File): string => {
@@ -41,6 +95,20 @@ export const extractImageData = (file: Express.Multer.File): string => {
     const allowed = ['image/jpeg', 'image/png', 'image/webp'];
     if (!allowed.includes(file.mimetype)) throw new Error('Invalid intel format: Image only');
     return file.buffer.toString('base64');
+};
+
+/**
+ * Same whitelist as extractImageData plus PDF — only ever used for
+ * attachments going into a DOMAIN_CONFIGS flow (see index.ts's isDomainFlow
+ * check). Kept separate from extractImageData, which stays image-only for
+ * every other caller (scene mode, ordinary chat vision, IMAGE_EDIT_MODEL_ID)
+ * — those all still assume 'image/jpeg' downstream, so a PDF must never
+ * reach them.
+ */
+export const extractAttachmentData = (file: Express.Multer.File): { base64: string; mimeType: string } => {
+    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+    if (!allowed.includes(file.mimetype)) throw new Error('Invalid intel format: Image or PDF only');
+    return { base64: file.buffer.toString('base64'), mimeType: file.mimetype };
 };
 
 export const extractAudioData = (file: Express.Multer.File): string => {
@@ -277,7 +345,22 @@ export const getAvailableModels = async (isPro: boolean, freeUserCount: number =
                 health: 100,
                 features: 1,
                 capabilities: { text: false, imageGen: true, videoGen: false, voice: false }
-            }
+            },
+            // Clarify-then-render flow(s): text (clarifying Q&A) AND imageGen
+            // (the confirmed concept render) both apply to every entry here.
+            // Architecture is the only real one today — a future domain is
+            // just one more DOMAIN_CONFIGS object, with no new code here.
+            ...Object.values(DOMAIN_CONFIGS).map(cfg => ({
+                id: cfg.id,
+                name: cfg.displayName,
+                provider: 'google',
+                isProOnly: !!cfg.requiresAddon,
+                price: cfg.requiresAddon ? 'PRO' : 'Free',
+                quota: cfg.requiresAddon ? 'Premium Unlocked' : `${Math.floor(GEMINI_FREE_DAILY_LIMIT / freeUserCount)} req/day`,
+                health: 100,
+                features: 1,
+                capabilities: { text: true, imageGen: true, videoGen: false, voice: false }
+            }))
         ];
     }
 
@@ -426,7 +509,8 @@ const generateVideo = async (
  */
 export const getAiResponse = async (
     prompt: string, provider: string, history: any[], user?: any, imageDatas?: string[],
-    audioData?: string, videoData?: { base64: string, mimeType: string }, imageRoles?: string[]
+    audioData?: string, videoData?: { base64: string, mimeType: string }, imageRoles?: string[],
+    confirmArchRender?: boolean, archUnderstanding?: string, imageMimeTypes?: string[]
 ): Promise<AiResponse> => {
     const geminiKeyForGeneration = process.env.GEMINI_API_KEY;
     // Scene Mode's keyframe images, pulled out by role rather than position —
@@ -515,6 +599,60 @@ export const getAiResponse = async (
         // All attached images go through (not just imageDatas[0]) so a character
         // reference image can actually influence the edit.
         return editImage(prompt, imageDatas, 'image/jpeg', geminiKeyForGeneration);
+    }
+    const domainConfig = DOMAIN_CONFIGS[provider];
+    if (domainConfig) {
+        if (domainConfig.requiresAddon && (!user?.deviceId || !(await hasAddon(user.deviceId, domainConfig.requiresAddon)))) {
+            return { content: '', provider, success: false, error: `${domainConfig.displayName} is a Mistreal Pro feature — unlock it in Settings.` };
+        }
+        if (!geminiKeyForGeneration) return { content: '', provider, success: false, error: `${domainConfig.displayName} is not configured.` };
+
+        // Abuse-prevention safety valve, not a billing quota — see
+        // domainRateLimiter.ts. Checked after the Pro gate (never blocks a
+        // non-paying rejection early) and before spending a Gemini call.
+        const limitError = checkDomainRateLimit(user?.deviceId);
+        if (limitError) return { content: '', provider, success: false, error: limitError };
+
+        // Always the app's own Gemini key, never the user's BYOK chat
+        // provider — BYOK OpenAI/Anthropic silently drop image attachments
+        // (see openAiCompatibleProvider.ts/anthropicProvider.ts), so this is
+        // the only reliable way to actually read the user's sketch.
+        const domainHistory = history.map((m: any) => ({ role: m.role, content: m.content }));
+        const chatResult = await GeminiProvider.chat({
+            systemInstruction: domainConfig.systemInstruction,
+            history: domainHistory,
+            prompt: confirmArchRender
+                ? `${prompt}\n\n(The user confirmed this understanding and wants the image generated now: ${archUnderstanding || '{}'})`
+                : prompt,
+            apiKey: geminiKeyForGeneration,
+            modelCandidates: await getRankedGeminiModels(true),
+            imageDatas, imageMimeTypes, audioData
+        });
+
+        if (!chatResult.success) return { content: '', provider, success: false, error: chatResult.error };
+        if (!confirmArchRender) return { content: chatResult.content, provider, success: true };
+
+        // Confirmed — also render the image, reusing the same generate/edit
+        // functions the ordinary image-gen/edit providers use. editImage when
+        // the user's own sketch is available to riff on, generateImage
+        // otherwise. Text + image both populate on this one response —
+        // ChatViewModel.kt already turns each into its own message.
+        let understanding: any = {};
+        try { understanding = archUnderstanding ? JSON.parse(archUnderstanding) : {}; } catch { understanding = {}; }
+        const renderPrompt = domainConfig.buildRenderPrompt(understanding, prompt);
+
+        // Only real images (not PDFs) can feed the pixel-editing step — a
+        // PDF informs the clarifying conversation but isn't something
+        // editImage/Gemini's image-edit model can riff on.
+        const sketchImageDatas = (imageDatas || []).filter((_, i) =>
+            (imageMimeTypes?.[i] || 'image/jpeg').startsWith('image/'));
+
+        const imageResult = sketchImageDatas.length > 0
+            ? await editImage(renderPrompt, sketchImageDatas, 'image/jpeg', geminiKeyForGeneration)
+            : await generateImage(renderPrompt, geminiKeyForGeneration);
+
+        if (!imageResult.success) return { content: chatResult.content, provider, success: true, error: imageResult.error };
+        return { ...imageResult, content: chatResult.content, provider };
     }
 
     const geminiKey = process.env.GEMINI_API_KEY;

@@ -138,6 +138,110 @@ export const sendEmergencyAlertNotificationEmail = async (
     }
 };
 
+/**
+ * Permanent, app-independent incident record — sent to a FIXED env-var
+ * destination (SOS_ARCHIVE_EMAIL), deliberately never user-configurable,
+ * so the details survive an app delete/uninstall rather than living only
+ * on the device. Fires once per alert (both manual SOS and a meetup-panic
+ * dead-man's-switch), at the same moment confirmed contacts are notified.
+ */
+export const sendSosArchiveEmail = async (
+    alert: { id: number; triggerType: string; latitude: number; longitude: number; sosAudioUrl: string | null; sosImageUrl: string | null; distressSignature: string | null },
+    ownerName: string,
+    ownerDeviceId: string,
+    counterpartyName: string | null
+): Promise<void> => {
+    const transporter = getTransporter();
+    const user = process.env.GMAIL_USER;
+    const toEmail = process.env.SOS_ARCHIVE_EMAIL;
+    if (!transporter || !user || !toEmail) {
+        console.warn('⚠️ GMAIL_USER/GMAIL_APP_PASS/SOS_ARCHIVE_EMAIL not fully set. SOS archive email skipped.');
+        return;
+    }
+
+    const mapsLink = `https://www.google.com/maps?q=${alert.latitude},${alert.longitude}`;
+    const counterpartyLine = counterpartyName ? `\nScheduled to meet: ${counterpartyName}` : '';
+
+    const mailOptions = {
+        from: user,
+        to: toEmail,
+        subject: `🆘 [Archive] SOS alert #${alert.id} — ${ownerName}`,
+        text: `Alert #${alert.id} (${alert.triggerType}) for ${ownerName} (device ${ownerDeviceId}).\n\nReason: ${alert.distressSignature || 'n/a'}${counterpartyLine}\nLast known location: ${mapsLink}\nVoice note: ${alert.sosAudioUrl || '(none captured)'}\nPhoto: ${alert.sosImageUrl || '(none attached)'}`,
+        html: `
+            <div style="font-family: sans-serif; padding: 20px; border: 2px solid #D32F2F;">
+                <h2 style="color: #D32F2F;">🆘 SOS Archive — Alert #${alert.id}</h2>
+                <p><strong>${ownerName}</strong> (device ${ownerDeviceId}) — trigger: ${alert.triggerType}</p>
+                <p>Reason: ${alert.distressSignature || 'n/a'}</p>
+                ${counterpartyName ? `<p>Scheduled to meet: <strong>${counterpartyName}</strong></p>` : ''}
+                <p>Last known location: <a href="${mapsLink}">${mapsLink}</a></p>
+                <p>Voice note: ${alert.sosAudioUrl ? `<a href="${alert.sosAudioUrl}">${alert.sosAudioUrl}</a>` : '(none captured)'}</p>
+                <p>Photo: ${alert.sosImageUrl ? `<a href="${alert.sosImageUrl}">${alert.sosImageUrl}</a>` : '(none attached)'}</p>
+                <p style="color: #666; font-size: 12px;">Permanent incident record — this email is the only copy that survives an app delete/uninstall.</p>
+            </div>
+        `
+    };
+
+    try {
+        await transporter.sendMail(mailOptions);
+        console.log(`✅ SOS archive email sent for alert ${alert.id}`);
+    } catch (error: any) {
+        console.error(`❌ Error sending SOS archive email for alert ${alert.id}:`, error.message);
+    }
+};
+
+/**
+ * Monthly operator report — new users in the past 30 days, total
+ * registered users, and per-business ad engagement for the same window.
+ * Sent to REPORT_EMAIL_TO (falls back to GMAIL_USER, same "mail yourself"
+ * pattern sendMilestoneEmail already established) — see index.ts's
+ * monthly interval for what triggers this and how the numbers are
+ * computed.
+ */
+export const sendMonthlyReportEmail = async (
+    newUserCount: number,
+    totalUserCount: number,
+    adStats: { businessId: string; businessName: string; impressions: number; engagedClicks: number }[]
+) => {
+    const transporter = getTransporter();
+    const user = process.env.GMAIL_USER;
+    const toEmail = process.env.REPORT_EMAIL_TO || user;
+    if (!transporter || !user || !toEmail) {
+        console.warn('⚠️ GMAIL_USER/GMAIL_APP_PASS/REPORT_EMAIL_TO not fully set. Monthly report skipped.');
+        return;
+    }
+
+    const adRows = adStats.length === 0
+        ? '<tr><td colspan="3" style="color:#666;">No ad activity this period.</td></tr>'
+        : adStats.map(a => `<tr><td>${a.businessName}</td><td>${a.impressions}</td><td>${a.engagedClicks}</td></tr>`).join('');
+
+    const mailOptions = {
+        from: user,
+        to: toEmail,
+        subject: `📊 Mistreal Monthly Report — ${newUserCount} new users`,
+        text: `New users (last 30 days): ${newUserCount}\nTotal users: ${totalUserCount}\n\nAd engagement:\n${adStats.map(a => `${a.businessName}: ${a.impressions} impressions, ${a.engagedClicks} engaged clicks`).join('\n') || 'No ad activity this period.'}`,
+        html: `
+            <div style="font-family: sans-serif; padding: 20px; border: 1px solid #eee;">
+                <h2 style="color: #6200EE;">📊 Mistreal Monthly Report</h2>
+                <p>New users (last 30 days): <strong>${newUserCount}</strong></p>
+                <p>Total users: <strong>${totalUserCount}</strong></p>
+                <h3>Ad engagement</h3>
+                <table style="border-collapse: collapse; width: 100%;">
+                    <tr><th align="left">Business</th><th align="left">Impressions</th><th align="left">Engaged clicks</th></tr>
+                    ${adRows}
+                </table>
+                <p style="color: #666; font-size: 12px;">This is an automated monthly report from your Mistreal Backend.</p>
+            </div>
+        `
+    };
+
+    try {
+        await transporter.sendMail(mailOptions);
+        console.log(`✅ Monthly report email sent to ${toEmail}`);
+    } catch (error: any) {
+        console.error('❌ Error sending monthly report email:', error.message);
+    }
+};
+
 export const sendMilestoneEmail = async (userCount: number) => {
     const transporter = getTransporter();
     const user = process.env.GMAIL_USER;

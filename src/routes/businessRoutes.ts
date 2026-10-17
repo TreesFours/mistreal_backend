@@ -5,6 +5,7 @@ import { Business } from '../models/businessModel';
 import { MeetupProposal } from '../models/MeetupProposal';
 import { MeetupConfirmation } from '../models/MeetupConfirmation';
 import { persistToStorage } from './adRoutes';
+import { Ad } from '../models/adModel';
 import { getNearbyPlaces } from '../services/discoveryService';
 import logger from '../utils/logger';
 
@@ -31,6 +32,11 @@ const NEARBY_MEETUP_RADIUS_KM = parseFloat(process.env.SEARCH_NEARBY_MEETUP_RADI
 // native matches — Geoapify's own Places API caps this at 5000m regardless.
 const SEARCH_EXTERNAL_RADIUS_METERS = parseFloat(process.env.SEARCH_EXTERNAL_RADIUS_METERS || '5000');
 const NEARBY_MEETUP_BOOST_KM = parseFloat(process.env.SEARCH_NEARBY_MEETUP_BOOST_KM || '2');
+// A business running a paid ad ranks above pure proximity/trust — bigger
+// than the meetup-trust boost since this is a paid placement, not earned
+// history. Only businesses have ads (individuals can only tag skills —
+// see needRoutes.ts), so this never applies outside this search.
+const AD_BOOST_KM = parseFloat(process.env.SEARCH_AD_BOOST_KM || '10');
 
 /**
  * One-time upload for the owner's profile photo — either their live-
@@ -147,6 +153,10 @@ router.get('/search', async (req: Request, res: Response) => {
         });
         const countByBusiness = new Map<string, number>();
         const nearbyCountByBusiness = new Map<string, number>();
+        const activeAdBusinessIds = businessIds.length === 0 ? new Set<string>() : new Set(
+            (await Ad.findAll({ where: { businessId: { [Op.in]: businessIds }, isActive: true }, attributes: ['businessId'] }))
+                .map(a => a.businessId)
+        );
         const searcherLat = lat ? parseFloat(lat as string) : null;
         const searcherLon = lon ? parseFloat(lon as string) : null;
         const hasSearcherLocation = searcherLat !== null && searcherLon !== null && !isNaN(searcherLat) && !isNaN(searcherLon);
@@ -163,6 +173,7 @@ router.get('/search', async (req: Request, res: Response) => {
         let withCounts = businesses.map(b => ({
             ...b.toJSON(),
             confirmedMeetupsCount: countByBusiness.get(b.businessId) || 0,
+            hasActiveAd: activeAdBusinessIds.has(b.businessId),
             distanceKm: hasSearcherLocation && b.latitude !== null && b.longitude !== null
                 ? distanceKm(searcherLat!, searcherLon!, b.latitude, b.longitude)
                 : null
@@ -171,12 +182,18 @@ router.get('/search', async (req: Request, res: Response) => {
         if (hasSearcherLocation) {
             withCounts = withCounts.sort((a, b) => {
                 // Lower is better — raw distance minus a boost per nearby
-                // confirmed meetup, so a business with real local trust can
-                // out-rank one that's merely a bit closer with zero history.
-                const scoreA = (a.distanceKm ?? 99999) - (nearbyCountByBusiness.get(a.businessId) || 0) * NEARBY_MEETUP_BOOST_KM;
-                const scoreB = (b.distanceKm ?? 99999) - (nearbyCountByBusiness.get(b.businessId) || 0) * NEARBY_MEETUP_BOOST_KM;
+                // confirmed meetup (earned local trust) and a bigger boost
+                // for an active paid ad, so a business with either can
+                // out-rank one that's merely a bit closer with neither.
+                const scoreA = (a.distanceKm ?? 99999) - (nearbyCountByBusiness.get(a.businessId) || 0) * NEARBY_MEETUP_BOOST_KM - (a.hasActiveAd ? AD_BOOST_KM : 0);
+                const scoreB = (b.distanceKm ?? 99999) - (nearbyCountByBusiness.get(b.businessId) || 0) * NEARBY_MEETUP_BOOST_KM - (b.hasActiveAd ? AD_BOOST_KM : 0);
                 return scoreA - scoreB;
             });
+        } else {
+            // No searcher location to rank by proximity at all — an active
+            // ad is still a meaningful signal to lead with, falling back to
+            // the existing createdAt DESC order otherwise.
+            withCounts = withCounts.sort((a, b) => (b.hasActiveAd ? 1 : 0) - (a.hasActiveAd ? 1 : 0));
         }
 
         // External fallback — only when nothing native matches (not on

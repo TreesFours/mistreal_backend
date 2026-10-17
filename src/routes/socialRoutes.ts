@@ -342,7 +342,7 @@ router.post('/action', authenticateUser, validate(socialActionSchema), async (re
     try {
         const user = await getResolvedUser(req);
         if (!user) return res.status(404).json({ error: 'User not found' });
-        const { platform, type, content, targetId, mediaBase64, mediaMimeType, shareToCommunity } = req.body;
+        const { platform, type, content, targetId, mediaBase64, mediaMimeType, shareToCommunity, mistrealOnly } = req.body;
 
         // AI-generated/edited images only exist as base64 — host it briefly on our
         // own backend so Zernio has a real URL to fetch (see mediaStore.ts).
@@ -352,7 +352,7 @@ router.post('/action', authenticateUser, validate(socialActionSchema), async (re
             mediaUrl = buildMediaUrl(id);
         }
 
-        const result = await sendSocialAction(user, { platform, type, content, targetId, mediaUrl, shareToCommunity });
+        const result = await sendSocialAction(user, { platform, type, content, targetId, mediaUrl, shareToCommunity, mistrealOnly });
         res.json(result);
     } catch (error: any) { res.status(500).json({ error: error.message }); }
 });

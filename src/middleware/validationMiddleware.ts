@@ -35,6 +35,8 @@ export const chatSchema = z.object({
         firebaseUid: z.string().optional(),
         history: z.union([z.string(), z.array(z.any())]).optional(),
         contextMetadata: z.string().optional(),
+        confirmArchRender: z.union([z.string(), z.boolean()]).optional(),
+        archUnderstanding: z.string().optional(),
     }).refine(data => data.prompt || data.history, {
         message: "Either prompt or history (for voice) must be provided",
     })
@@ -50,6 +52,7 @@ export const socialActionSchema = z.object({
         mediaBase64: z.string().optional(),
         mediaMimeType: z.string().optional(),
         shareToCommunity: z.boolean().optional(),
+        mistrealOnly: z.boolean().optional(),
     })
 });
 

@@ -8,13 +8,14 @@ import { MeetupConfirmation } from '../models/MeetupConfirmation';
 import { ComfortMeetConfirmation } from '../models/ComfortMeetConfirmation';
 import { EmergencyContact } from '../models/EmergencyContact';
 import { EmergencyAlert } from '../models/EmergencyAlert';
+import { User } from '../models/userModel';
+import { notifyConfirmedContacts, resolveSosTiming } from './emergencyRoutes';
 import { persistToStorage } from './adRoutes';
 import logger from '../utils/logger';
 
 const router = Router();
 const appUrl = () => process.env.APP_URL || 'https://mistreal-backend.onrender.com';
-const SILENT_MEETUP_WINDOW_MS = 10 * 24 * 60 * 60 * 1000; // 10 days
-const ESCALATION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000; // matches Guardian's own window
+const ESCALATION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000; // legacy, see emergencyRoutes.ts's model comment
 
 // How close ('comfort' meetups only) two devices' live pings need to be,
 // and how fresh each side's most recent ping needs to be relative to the
@@ -345,23 +346,61 @@ router.get('/comfort-count', async (req: Request, res: Response) => {
 export default router;
 
 /**
- * 10-day silent-meetup sweep: a meetup whose scheduledAt has passed with
- * zero MeetupConfirmation rows gets escalated into a real Guardian alert
- * (reusing the exact same confirmed-contact-notification + 30-day public
- * escalation pipeline already built) rather than inventing a second,
- * parallel notification system. Exported as a function, called from
- * index.ts's interval alongside the other background workers.
+ * Resolves who a silent meetup's counterparty actually was, for the
+ * distress signature / archival email — falls back gracefully for a
+ * business-type meetup whose counterparty has no app/device row at all.
+ */
+const resolveCounterpartyName = async (meetup: MeetupProposal): Promise<string> => {
+    if (meetup.counterpartyDeviceId) {
+        const counterpartyUser = await User.findOne({ where: { deviceId: meetup.counterpartyDeviceId } });
+        if (counterpartyUser?.userName) return counterpartyUser.userName;
+    }
+    if (meetup.counterpartyPlatform) return `a contact on ${meetup.counterpartyPlatform}`;
+    return 'an unconfirmed counterparty';
+};
+
+// Coarse DB-level floor (the minimum any user is allowed to configure their
+// own silentMeetupWindowDays to, per resolveSosTiming's 1-30 day clamp) —
+// the actual per-user threshold is checked precisely below, this just
+// keeps the initial query from scanning meetups that can't possibly be due
+// for ANY user yet.
+const MIN_SILENT_MEETUP_WINDOW_MS = 24 * 60 * 60 * 1000; // 1 day
+
+/**
+ * Silent-meetup sweep: a meetup whose scheduledAt has passed the
+ * PROPOSER'S OWN configured silent-meetup window (default 4 days, user-
+ * adjustable via PATCH /api/emergency/sos-preferences, see
+ * emergencyRoutes.ts's resolveSosTiming) with zero confirmation raises a
+ * real Guardian alert AND immediately notifies the proposer's confirmed
+ * emergency contacts (see notifyConfirmedContacts in emergencyRoutes.ts) —
+ * this used to create the alert row directly and notify nobody, a real
+ * gap, not by design. Checks BOTH MeetupConfirmation (self-reported,
+ * business-type) and ComfortMeetConfirmation (live-proximity cross-check,
+ * comfort-type) — a comfort meetup that actually passed its proximity
+ * check has zero MeetupConfirmation rows by design and was previously
+ * misread as silent. Exported as a function, called from index.ts's
+ * interval alongside the other background workers.
  */
 export const sweepSilentMeetups = async () => {
-    const overdue = await MeetupProposal.findAll({
+    const candidates = await MeetupProposal.findAll({
         where: {
             status: { [Op.in]: ['proposed', 'accepted'] },
-            scheduledAt: { [Op.lte]: new Date(Date.now() - SILENT_MEETUP_WINDOW_MS) }
+            scheduledAt: { [Op.lte]: new Date(Date.now() - MIN_SILENT_MEETUP_WINDOW_MS) }
         }
     });
-    for (const meetup of overdue) {
+    for (const meetup of candidates) {
+        const proposerUser = await User.findOne({ where: { deviceId: meetup.proposerDeviceId } });
+        if (!proposerUser) continue;
+
+        const timing = resolveSosTiming(proposerUser);
+        const windowMs = timing.silentMeetupWindowDays * 86400000;
+        if (meetup.scheduledAt.getTime() > Date.now() - windowMs) continue; // not actually due yet for THIS user's own setting
+
         const confirmations = await MeetupConfirmation.count({ where: { meetupId: meetup.id } });
-        if (confirmations > 0) continue;
+        const comfortConfirmed = meetup.meetupType === 'comfort'
+            ? await ComfortMeetConfirmation.count({ where: { meetupId: meetup.id } })
+            : 0;
+        if (confirmations > 0 || comfortConfirmed > 0) continue;
 
         const alreadyAlerted = await EmergencyAlert.findOne({
             where: { ownerDeviceId: meetup.proposerDeviceId, triggerType: 'meetup_panic', distressSignature: { [Op.like]: `%meetup #${meetup.id}%` } }
@@ -371,15 +410,22 @@ export const sweepSilentMeetups = async () => {
         const hasConfirmedContact = await EmergencyContact.count({ where: { ownerDeviceId: meetup.proposerDeviceId, status: 'confirmed' } });
         if (hasConfirmedContact === 0) continue; // nothing to notify — don't create a dead-end alert
 
-        await EmergencyAlert.create({
+        const counterpartyName = await resolveCounterpartyName(meetup);
+        const signature = `Scheduled meetup #${meetup.id} with ${counterpartyName} was never confirmed by either side ${timing.silentMeetupWindowDays} days after the planned time.`;
+        const now = Date.now();
+        const alert = await EmergencyAlert.create({
             ownerDeviceId: meetup.proposerDeviceId,
             triggerType: 'meetup_panic',
             latitude: meetup.latitude,
             longitude: meetup.longitude,
-            distressSignature: `Scheduled meetup #${meetup.id} was never confirmed by either side 10 days after the planned time.`,
+            distressSignature: signature,
             status: 'active',
-            escalateAt: new Date(Date.now() + ESCALATION_WINDOW_MS)
+            escalateAt: new Date(now + ESCALATION_WINDOW_MS),
+            nextCommunityBroadcastAt: new Date(now + timing.communityBroadcastDelayDays * 86400000),
+            fullDetailAt: new Date(now + timing.fullDetailWindowDays * 86400000)
         });
-        logger.info(`🆘 Meetup ${meetup.id} unconfirmed 10 days past scheduled time — raised a Guardian alert for device ${meetup.proposerDeviceId}`);
+
+        await notifyConfirmedContacts(alert, proposerUser, signature, counterpartyName);
+        logger.info(`🆘 Meetup ${meetup.id} unconfirmed ${timing.silentMeetupWindowDays} days (this user's own setting) past scheduled time — raised and notified contacts for device ${meetup.proposerDeviceId}`);
     }
 };
