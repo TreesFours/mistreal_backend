@@ -8,7 +8,7 @@
  *
  * ⚠️ MANDATORY: Never delete history. Only ADD updates/fixes to the Master Map table.
  */
-import express, { Request, Response } from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import http from 'http';
 import { Server as SocketIOServer } from 'socket.io';
@@ -767,6 +767,39 @@ setInterval(async () => {
 // 🔍 404 Catch-all
 app.use((req, res) => {
     res.status(404).json({ success: false, error: `Endpoint NOT FOUND: ${req.method} ${req.url}` });
+});
+
+// 🚨 Global error handler — must be registered after every route/middleware
+// above (Express only recognizes a 4-arg function as an error handler), and
+// must come after the 404 catch-all so it only catches things that actually
+// threw. Previously there was no handler at all: an uncaught synchronous
+// throw (or a rejected promise in a route not wrapped in its own try/catch)
+// fell through to Express's bare-bones default — minimal/inconsistent body,
+// easy to miss in logs. This guarantees every error response is detailed
+// JSON the client can actually surface (see Android's ErrorNotifyInterceptor),
+// and that nothing here crashes the process.
+app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+    const detail = err?.message || String(err);
+    logger.error(`❌ Unhandled error on ${req.method} ${req.originalUrl}: ${detail}`, err?.stack);
+    if (res.headersSent) return next(err);
+    res.status(err?.status || 500).json({
+        success: false,
+        error: detail,
+        path: `${req.method} ${req.originalUrl}`
+    });
+});
+
+// Belt-and-suspenders: a promise rejection or exception that somehow still
+// escapes every route's own try/catch AND the Express error handler above
+// (e.g. inside a fire-and-forget background job, not a request handler at
+// all) would otherwise crash the whole process silently. Log and keep running
+// — consistent with how every other error path in this file already treats
+// failures as "log and continue," never "exit."
+process.on('unhandledRejection', (reason: any) => {
+    logger.error(`❌ Unhandled promise rejection: ${reason?.message || reason}`, reason?.stack);
+});
+process.on('uncaughtException', (err: Error) => {
+    logger.error(`❌ Uncaught exception: ${err.message}`, err.stack);
 });
 
 // Boot

@@ -102,11 +102,11 @@ export const ZernioAdapter = {
    * the id sendAction's Direct Message branch needs to reply into the same
    * thread via POST /inbox/conversations/{conversationId}/messages.
    */
-  fetchInbox: async (profileId: string) => {
+  fetchInbox: async (profileId: string): Promise<{ available: boolean; items: any[] }> => {
     try {
       if (!profileId) throw new Error('Security Error: profileId is required for data isolation.');
 
-      const [conversationsResp, contacts] = await Promise.all([
+      const [conversationsResp, contactsResult] = await Promise.all([
         axios.get(`${ZERNIO_API_URL}/inbox/conversations`, {
           params: { profileId, limit: 20 },
           headers: { 'Authorization': `Bearer ${getApiKey()}` }
@@ -115,10 +115,11 @@ export const ZernioAdapter = {
       ]);
 
       const conversations = conversationsResp.data?.conversations || conversationsResp.data?.data || conversationsResp.data || [];
-      if (!Array.isArray(conversations) || conversations.length === 0) return [];
+      if (!Array.isArray(conversations) || conversations.length === 0) return { available: true, items: [] };
 
+      const contacts = contactsResult.items;
       const contactNameById = new Map<string, string>(
-        (Array.isArray(contacts) ? contacts : []).map((c: any) => [c.id || c._id, c.name || c.username])
+        contacts.map((c: any) => [c.id || c._id, c.name || c.username])
       );
 
       // Cap fan-out: one /messages request per conversation, most-recently-active first.
@@ -150,10 +151,10 @@ export const ZernioAdapter = {
         }
       }));
 
-      return perConversation.flat();
+      return { available: true, items: perConversation.flat() };
     } catch (error: any) {
       console.error(`Zernio Inbox Error [${profileId}]:`, error.response?.data || error.message);
-      return [];
+      return { available: false, items: [] };
     }
   },
 
@@ -167,7 +168,7 @@ export const ZernioAdapter = {
    * via its `platforms[]` array, so one Zernio post becomes one normalized
    * item per platform entry.
    */
-  fetchFeed: async (profileId: string) => {
+  fetchFeed: async (profileId: string): Promise<{ available: boolean; items: any[] }> => {
     try {
       if (!profileId) throw new Error('profileId required');
       const response = await axios.get(`${ZERNIO_API_URL}/posts`, {
@@ -175,7 +176,7 @@ export const ZernioAdapter = {
         headers: { 'Authorization': `Bearer ${getApiKey()}` }
       });
       const posts = response.data?.posts || response.data?.data || response.data || [];
-      if (!Array.isArray(posts)) return [];
+      if (!Array.isArray(posts)) return { available: true, items: [] };
 
       const items: any[] = [];
       for (const post of posts) {
@@ -194,10 +195,10 @@ export const ZernioAdapter = {
           });
         }
       }
-      return items;
+      return { available: true, items };
     } catch (error: any) {
       console.error(`Zernio Feed Error [${profileId}]:`, error.response?.data || error.message);
-      return [];
+      return { available: false, items: [] };
     }
   },
 
@@ -338,35 +339,34 @@ export const ZernioAdapter = {
   /**
    * Search for new contacts on a platform
    */
-  searchPlatform: async (profileId: string, platform: string, query: string) => {
+  searchPlatform: async (profileId: string, platform: string, query: string): Promise<{ available: boolean; items: any[] }> => {
     try {
       // Note: Zernio doesn't have a single "search" for all platforms,
       // but many platform connectors support it.
-      // For now, we return a filtered contact list or a mock if search isn't supported.
       const response = await axios.get(`${ZERNIO_API_URL}/contacts/search`, {
         params: { profileId, platform, q: query },
         headers: { 'Authorization': `Bearer ${getApiKey()}` }
       });
-      return response.data.contacts || [];
+      return { available: true, items: response.data.contacts || [] };
     } catch (e: any) {
       console.warn(`Search failed for ${platform}: ${e.message}`);
-      return [];
+      return { available: false, items: [] };
     }
   },
 
   /**
    * Fetch absolute contact list for a profile/platform
    */
-  fetchContacts: async (profileId: string, platform?: string) => {
+  fetchContacts: async (profileId: string, platform?: string): Promise<{ available: boolean; items: any[] }> => {
     try {
       const response = await axios.get(`${ZERNIO_API_URL}/contacts`, {
         params: { profileId, platform },
         headers: { 'Authorization': `Bearer ${getApiKey()}` }
       });
-      return response.data.contacts || [];
+      return { available: true, items: response.data.contacts || [] };
     } catch (e: any) {
       console.error(`Zernio Contacts Fetch Error: ${e.message}`);
-      return [];
+      return { available: false, items: [] };
     }
   },
 
@@ -374,17 +374,17 @@ export const ZernioAdapter = {
    * Fetch connected accounts for a Zernio Profile
    * Verifies which platforms are actually linked and active.
    */
-  fetchAccounts: async (profileId: string) => {
+  fetchAccounts: async (profileId: string): Promise<{ available: boolean; items: any[] }> => {
     try {
-      if (!profileId) return [];
+      if (!profileId) return { available: true, items: [] };
       const response = await axios.get(`${ZERNIO_API_URL}/accounts`, {
         params: { profileId },
         headers: { 'Authorization': `Bearer ${getApiKey()}` }
       });
-      return response.data.accounts || response.data.data || [];
+      return { available: true, items: response.data.accounts || response.data.data || [] };
     } catch (e: any) {
       console.error(`Zernio Accounts Fetch Error [${profileId}]:`, e.response?.data || e.message);
-      return [];
+      return { available: false, items: [] };
     }
   },
 

@@ -1,6 +1,20 @@
 import axios from 'axios';
 import logger from '../../utils/logger';
-import { AiProvider, ProviderChatRequest, ProviderChatResponse } from './types';
+import { AiProvider, GroundingCitation, ProviderChatRequest, ProviderChatResponse } from './types';
+
+// google_search_retrieval's citation payload has shifted shape across Gemini
+// API versions (groundingChunks vs. the older groundingAttributions) — check
+// both rather than betting on one, so a version bump doesn't silently go
+// back to discarding citations.
+const extractGroundingCitations = (candidate: any): GroundingCitation[] | undefined => {
+    const chunks = candidate?.groundingMetadata?.groundingChunks || candidate?.groundingMetadata?.groundingAttributions;
+    if (!Array.isArray(chunks) || chunks.length === 0) return undefined;
+    const citations = chunks
+        .map((chunk: any) => chunk.web || chunk.retrievedContext)
+        .filter((web: any) => web?.uri)
+        .map((web: any) => ({ uri: web.uri as string, title: web.title as string | undefined }));
+    return citations.length > 0 ? citations : undefined;
+};
 
 const GOOGLE_AI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const REQUEST_TIMEOUT_MS = 15000;
@@ -61,10 +75,12 @@ export const GeminiProvider: AiProvider = {
                 });
 
                 if (response.status === 200 && response.data?.candidates?.[0]?.content?.parts?.[0]?.text) {
+                    const candidate = response.data.candidates[0];
                     return {
-                        content: response.data.candidates[0].content.parts[0].text,
+                        content: candidate.content.parts[0].text,
                         modelUsed: targetModel,
-                        success: true
+                        success: true,
+                        groundingCitations: extractGroundingCitations(candidate)
                     };
                 }
 

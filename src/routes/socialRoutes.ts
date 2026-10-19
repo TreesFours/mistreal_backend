@@ -231,7 +231,7 @@ router.get('/social-stats', async (req: Request, res: Response) => {
         const user = await User.findOne({ where: { deviceId } });
         if (!user?.zernioProfileId) return res.json({ success: true, stats: [] });
 
-        const accounts = await ZernioAdapter.fetchAccounts(user.zernioProfileId);
+        const { items: accounts } = await ZernioAdapter.fetchAccounts(user.zernioProfileId);
         const stats = await Promise.all(
             (accounts || []).map(async (account: any) => {
                 const accountId = account.id || account._id || account.accountId;

@@ -55,15 +55,12 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
             console.info(`🚰 [SYNC] Hydrating ${unhydrated.join(', ')} from Zernio for Profile: ${user.zernioProfileId}`);
             try {
                 // Fetch both DMs (Inbox) AND Social Posts (Feed)
-                const [inboxItemsRaw, feedItemsRaw] = await Promise.all([
+                const [inboxResult, feedResult] = await Promise.all([
                     ZernioAdapter.fetchInbox(user.zernioProfileId),
                     ZernioAdapter.fetchFeed(user.zernioProfileId)
                 ]);
-                // Zernio is expected to return an array for both — guard against a
-                // malformed/non-array response shape so a spread below can't throw
-                // and silently blank out the whole feed.
-                const inboxItems = Array.isArray(inboxItemsRaw) ? inboxItemsRaw : [];
-                const feedItems = Array.isArray(feedItemsRaw) ? feedItemsRaw : [];
+                const inboxItems = inboxResult.items;
+                const feedItems = feedResult.items;
                 const feedItemSet = new Set(feedItems);
 
                 const allRemoteItems = [...inboxItems, ...feedItems]
@@ -71,7 +68,13 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
                 console.info(`📥 [SYNC] Zernio returned ${inboxItems.length} Inbox items and ${feedItems.length} Feed items (${allRemoteItems.length} for newly-connected platforms).`);
 
                 if (inboxItems.length === 0 && feedItems.length === 0) {
-                    syncWarnings.push(`Zernio returned zero items for profile ${user.zernioProfileId} — either the connected account(s) have no content yet, or Zernio isn't returning data for ${unhydrated.join(', ')} (some platforms, e.g. LinkedIn, restrict third-party read access by policy).`);
+                    // available:false now distinguishes a real fetch failure from a
+                    // genuinely empty account, instead of both looking identical.
+                    if (!inboxResult.available || !feedResult.available) {
+                        syncWarnings.push(`Zernio fetch failed for profile ${user.zernioProfileId} (inbox ${inboxResult.available ? 'ok' : 'unreachable'}, feed ${feedResult.available ? 'ok' : 'unreachable'}) — will retry on the next sync.`);
+                    } else {
+                        syncWarnings.push(`Zernio returned zero items for profile ${user.zernioProfileId} — the connected account(s) have no content yet, or Zernio isn't returning data for ${unhydrated.join(', ')} (some platforms, e.g. LinkedIn, restrict third-party read access by policy).`);
+                    }
                 }
 
                 // ZernioAdapter.fetchInbox/fetchFeed already return items pre-shaped
@@ -404,7 +407,7 @@ export const disconnectPlatform = async (deviceId: string, platform: string) => 
         // If Zernio profile exists, issue real API delete to Zernio
         if (user.zernioProfileId && process.env.ZERNIO_API_KEY) {
             try {
-                const accounts = await ZernioAdapter.fetchAccounts(user.zernioProfileId);
+                const { items: accounts } = await ZernioAdapter.fetchAccounts(user.zernioProfileId);
                 const targetAccount = accounts.find((a: any) => isPlatformMatching(a.platform || a.type || '', normPlatform));
                 if (targetAccount) {
                     // Confirmed real Account schema field is `id` (Zernio's OpenAPI
@@ -439,7 +442,7 @@ export const reconcileUserPlatforms = async (user: User): Promise<string[]> => {
         return Array.from(new Set(existingConnected));
     }
     try {
-        const accounts = await ZernioAdapter.fetchAccounts(user.zernioProfileId);
+        const { items: accounts } = await ZernioAdapter.fetchAccounts(user.zernioProfileId);
         const zernioPlatforms = accounts
             .map((a: any) => normalizePlatformId(a.platform || a.type || ''))
             .filter(Boolean);
@@ -592,7 +595,7 @@ export const getPlatformContacts = async (user: User, platform: string, search?:
             // empty for anyone not already in the user's DM history.
             if (user.zernioProfileId) {
                 const existingIds = new Set(contactsList.map(c => c.id));
-                const zernioResults = await ZernioAdapter.searchPlatform(user.zernioProfileId, platform, search.trim());
+                const { items: zernioResults } = await ZernioAdapter.searchPlatform(user.zernioProfileId, platform, search.trim());
                 for (const c of zernioResults) {
                     const id = c.id || c._id;
                     if (id && !existingIds.has(id)) {
@@ -615,7 +618,7 @@ export const getPlatformContacts = async (user: User, platform: string, search?:
         }
 
         if (contactsList.length === 0 && user.zernioProfileId) {
-            const zernioContacts = await ZernioAdapter.fetchContacts(user.zernioProfileId, platform);
+            const { items: zernioContacts } = await ZernioAdapter.fetchContacts(user.zernioProfileId, platform);
             return zernioContacts.map((c: any) => ({
                 id: c.id || c._id,
                 name: c.name || c.username || 'Social Contact',

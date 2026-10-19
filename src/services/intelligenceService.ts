@@ -275,7 +275,8 @@ export class IntelligenceService {
                             title: a.title,
                             description: a.description || 'No description available.',
                             url: a.url,
-                            source: 'News',
+                            imageUrl: a.urlToImage || null,
+                            source: a.source?.name || 'News',
                             category: cat,
                             timestamp: a.publishedAt || new Date().toISOString()
                         }));
@@ -426,6 +427,9 @@ export class IntelligenceService {
                 title: `[Novel] ${w.title}`,
                 description: `Author: ${w.author_name?.join(', ') || 'Unknown'}. A trending piece in literature.`,
                 url: await this.getReadableBookUrl(w.key),
+                // Medium-size cover — OpenLibrary's covers.openlibrary.org serves
+                // -S/-M/-L sizes off this same id; null when a work has no cover_i.
+                imageUrl: w.cover_i ? `https://covers.openlibrary.org/b/id/${w.cover_i}-M.jpg` : null,
                 source: 'OpenLibrary',
                 timestamp: new Date().toISOString()
             })));

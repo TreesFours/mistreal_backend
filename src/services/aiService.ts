@@ -24,6 +24,9 @@ export interface AiResponse {
     generatedImageMimeType?: string;
     generatedImageUrl?: string;
     generatedVideoUrl?: string;
+    // Only ever set when Gemini's google_search_retrieval tool grounded the
+    // answer — previously computed and immediately discarded.
+    groundingCitations?: { uri: string; title?: string }[];
 }
 
 export const IMAGE_GEN_MODEL_ID = 'imagen-3.0-generate-002';
@@ -751,7 +754,8 @@ export const getAiResponse = async (
                 content: result.content,
                 provider: `byok:${user.byokProviderType}`,
                 success: result.success,
-                error: result.error
+                error: result.error,
+                groundingCitations: result.groundingCitations
             };
         } catch (error: any) {
             logger.error(`❌ BYOK execution error: ${error.message}`);
@@ -784,7 +788,7 @@ export const getAiResponse = async (
         });
 
         if (result.success) {
-            return { content: result.content, provider: result.modelUsed, success: true };
+            return { content: result.content, provider: result.modelUsed, success: true, groundingCitations: result.groundingCitations };
         }
 
         // 🚨 ULTIMATE EMERGENCY PIVOT: If all Google candidates fail, try OpenRouter as a bridge.

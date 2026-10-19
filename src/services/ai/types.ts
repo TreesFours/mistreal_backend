@@ -16,11 +16,20 @@ export interface ProviderChatRequest {
     audioData?: string;
 }
 
+export interface GroundingCitation {
+    uri: string;
+    title?: string;
+}
+
 export interface ProviderChatResponse {
     content: string;
     modelUsed: string;
     success: boolean;
     error?: string;
+    // Only ever populated by GeminiProvider, when google_search_retrieval
+    // grounded the answer — the tool was already being paid for on every
+    // Gemini request, but its citation output was previously discarded.
+    groundingCitations?: GroundingCitation[];
 }
 
 export interface AiProvider {

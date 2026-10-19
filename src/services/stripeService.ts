@@ -61,8 +61,11 @@ export const createBillingPortalSession = async (deviceId: string): Promise<stri
 export const handleStripeWebhook = async (rawBody: Buffer, signature: string): Promise<void> => {
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
     if (!webhookSecret) {
-        logger.warn('⚠️ STRIPE_WEBHOOK_SECRET not set — cannot verify Stripe webhooks.');
-        return;
+        // Throwing (instead of a silent return) makes index.ts's webhook route
+        // answer Stripe with a non-200, so Stripe's own retry/alerting kicks
+        // in — a misconfigured secret used to mean purchases were silently
+        // granted to nobody with no signal anywhere that anything was wrong.
+        throw new Error('STRIPE_WEBHOOK_SECRET not set — cannot verify Stripe webhooks.');
     }
 
     const event = getStripe().webhooks.constructEvent(rawBody, signature, webhookSecret);

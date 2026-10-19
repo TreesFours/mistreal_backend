@@ -16,6 +16,9 @@ export class CachedYoutubeVideo extends Model {
     public viewCount!: number | null;
     public likeCount!: number | null;
     public queryTag!: string;
+    public description!: string | null;
+    public durationSeconds!: number | null;
+    public commentCount!: number | null;
 }
 
 CachedYoutubeVideo.init({
@@ -26,7 +29,10 @@ CachedYoutubeVideo.init({
     publishedAt: { type: DataTypes.DATE, allowNull: true },
     viewCount: { type: DataTypes.BIGINT, allowNull: true },
     likeCount: { type: DataTypes.BIGINT, allowNull: true },
-    queryTag: { type: DataTypes.STRING, allowNull: true }
+    queryTag: { type: DataTypes.STRING, allowNull: true },
+    description: { type: DataTypes.TEXT, allowNull: true },
+    durationSeconds: { type: DataTypes.INTEGER, allowNull: true },
+    commentCount: { type: DataTypes.BIGINT, allowNull: true }
 }, {
     sequelize,
     modelName: 'CachedYoutubeVideo',
