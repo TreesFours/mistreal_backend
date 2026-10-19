@@ -1,0 +1,1 @@
+Self-hosted games live here, one folder per hostedSlug, each with its own index.html — served at /games-static/<hostedSlug>/index.html (see src/index.ts and src/routes/gameRoutes.ts).

@@ -78,6 +78,7 @@ export const registerWatchSignaling = (io: SocketIOServer): void => {
         socket.on('signal:offer', relay('signal:offer'));
         socket.on('signal:answer', relay('signal:answer'));
         socket.on('signal:ice', relay('signal:ice'));
+        socket.on('viewer:rejected', relay('viewer:rejected'));
 
         socket.on('host:stop', async (payload: { sessionId: string }) => {
             await endSession(payload.sessionId, watch);

@@ -9,6 +9,7 @@
  * ⚠️ MANDATORY: Never delete history. Only ADD updates/fixes to the Master Map table.
  */
 import express, { Request, Response } from 'express';
+import path from 'path';
 import http from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import cors from 'cors';
@@ -55,6 +56,7 @@ import aiProviderRoutes from './routes/aiProviderRoutes';
 import emergencyRoutes from './routes/emergencyRoutes';
 import emailRoutes from './routes/emailRoutes';
 import marketRoutes from './routes/marketRoutes';
+import gameRoutes from './routes/gameRoutes';
 import { checkAlerts as checkMarketAlerts } from './services/marketDataService';
 import { MarketAlert } from './models/MarketAlert'; // imported for Sequelize registration — table is created by sequelize.sync below
 import { EmergencyContact } from './models/EmergencyContact'; // same — registration only
@@ -143,6 +145,11 @@ app.use('/api/cloud-storage', cloudStorageRoutes);
 app.use('/api/needs', needRoutes);
 app.use('/api/ads', adRoutes);
 app.use('/api/markets', marketRoutes);
+app.use('/api/games', gameRoutes);
+// Static files for self-hosted games (Game.sourceType === 'hosted') — each
+// lives at backend/public/games/<hostedSlug>/index.html, resolved into a
+// full playUrl by gameRoutes.ts so the client never sees this path directly.
+app.use('/games-static', express.static(path.join(__dirname, '../public/games')));
 
 app.get('/', (req, res) => res.send('🚀 Mistreal Backend Running'));
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date() }));
