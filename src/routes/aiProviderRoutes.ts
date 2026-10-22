@@ -80,6 +80,7 @@ router.get('/status', async (req: Request, res: Response) => {
             baseUrl: user.byokBaseUrl
         });
     } catch (error: any) {
+        logger.error(`❌ BYOK status fetch error: ${error.message}`);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -155,6 +156,7 @@ router.get('/video-status', async (req: Request, res: Response) => {
             baseUrl: user.byokVideoBaseUrl
         });
     } catch (error: any) {
+        logger.error(`❌ BYOK video-status fetch error: ${error.message}`);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -209,6 +211,7 @@ router.get('/media-configs', async (req: Request, res: Response) => {
             configs: configs.map((c: any) => ({ id: c.id, label: c.label, providerType: c.providerType, modelName: c.modelName }))
         });
     } catch (error: any) {
+        logger.error(`❌ Media-configs fetch error: ${error.message}`);
         res.status(500).json({ success: false, error: error.message });
     }
 });

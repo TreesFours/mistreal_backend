@@ -23,6 +23,8 @@ export const registerWatchSignaling = (io: SocketIOServer): void => {
     const watch = io.of('/watch');
 
     watch.on('connection', (socket: Socket) => {
+        logger.info(`📡 [WATCH] Socket connected: ${socket.id}`);
+
         socket.on('host:start', async (payload: { deviceId: string; contextType?: string; contextId?: string }, ack: Ack) => {
             try {
                 const sessionId = genSessionId();
@@ -40,6 +42,7 @@ export const registerWatchSignaling = (io: SocketIOServer): void => {
                 ack?.({ success: true, sessionId });
                 logger.info(`📡 [WATCH] Host ${payload.deviceId} started session ${sessionId}`);
             } catch (error: any) {
+                logger.error(`❌ [WATCH] host:start failed for device ${payload.deviceId}: ${error.message}`);
                 ack?.({ success: false, error: error.message });
             }
         });
@@ -47,15 +50,22 @@ export const registerWatchSignaling = (io: SocketIOServer): void => {
         socket.on('viewer:join', async (payload: { sessionId: string; deviceId: string }, ack: Ack) => {
             try {
                 const session = await WatchSession.findOne({ where: { id: payload.sessionId, status: 'live' } });
-                if (!session) return ack?.({ success: false, error: 'Session not found or has ended' });
+                if (!session) {
+                    logger.warn(`⚠️ [WATCH] viewer:join rejected — session ${payload.sessionId} not found/ended (device ${payload.deviceId})`);
+                    return ack?.({ success: false, error: 'Session not found or has ended' });
+                }
 
                 const hostSocketId = sessionIdToHostSocketId.get(payload.sessionId);
-                if (!hostSocketId) return ack?.({ success: false, error: 'Host is not currently connected' });
+                if (!hostSocketId) {
+                    logger.warn(`⚠️ [WATCH] viewer:join rejected — host not connected for session ${payload.sessionId} (device ${payload.deviceId})`);
+                    return ack?.({ success: false, error: 'Host is not currently connected' });
+                }
 
                 socket.join(`session:${payload.sessionId}`);
                 socket.data.sessionId = payload.sessionId;
                 socket.data.isHost = false;
                 ack?.({ success: true });
+                logger.info(`📡 [WATCH] Viewer ${payload.deviceId} joined session ${payload.sessionId}`);
 
                 // Tells the host "this viewer wants in" — the host creates a
                 // new PeerConnection for them and sends an offer back via
@@ -66,13 +76,27 @@ export const registerWatchSignaling = (io: SocketIOServer): void => {
                     viewerSocketId: socket.id
                 });
             } catch (error: any) {
+                logger.error(`❌ [WATCH] viewer:join threw for session ${payload.sessionId}: ${error.message}`);
                 ack?.({ success: false, error: error.message });
             }
         });
 
         // Pure relay — the server never inspects sdp/candidate content,
-        // just forwards it to the specific socket the sender named.
+        // just forwards it to the specific socket the sender named, but only
+        // if that target is actually in the same session room as the sender
+        // (otherwise a client could name an arbitrary socket id and inject
+        // signaling into a negotiation it isn't part of).
         const relay = (event: string) => (payload: { toSocketId: string;[key: string]: any }) => {
+            const sessionId = socket.data.sessionId as string | undefined;
+            if (!sessionId) {
+                logger.warn(`⚠️ [WATCH] Dropped ${event} from ${socket.id} — sender has no active session`);
+                return;
+            }
+            const targetSocket = watch.sockets.get(payload.toSocketId);
+            if (!targetSocket || !targetSocket.rooms.has(`session:${sessionId}`)) {
+                logger.warn(`⚠️ [WATCH] Dropped ${event} from ${socket.id} — target ${payload.toSocketId} not in session:${sessionId}`);
+                return;
+            }
             watch.to(payload.toSocketId).emit(event, { ...payload, fromSocketId: socket.id });
         };
         socket.on('signal:offer', relay('signal:offer'));
@@ -81,11 +105,17 @@ export const registerWatchSignaling = (io: SocketIOServer): void => {
         socket.on('viewer:rejected', relay('viewer:rejected'));
 
         socket.on('host:stop', async (payload: { sessionId: string }) => {
+            if (sessionIdToHostSocketId.get(payload.sessionId) !== socket.id) {
+                logger.warn(`⚠️ [WATCH] Rejected host:stop from ${socket.id} — not the host of session ${payload.sessionId}`);
+                return;
+            }
+            logger.info(`📡 [WATCH] Host stopped session ${payload.sessionId}`);
             await endSession(payload.sessionId, watch);
         });
 
         socket.on('disconnect', async () => {
             const sessionId = socket.data.sessionId as string | undefined;
+            logger.info(`📡 [WATCH] Socket disconnected: ${socket.id}${sessionId ? ` (session ${sessionId}, host=${!!socket.data.isHost})` : ''}`);
             if (!sessionId) return;
             if (socket.data.isHost) {
                 await endSession(sessionId, watch);

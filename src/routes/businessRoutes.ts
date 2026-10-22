@@ -82,6 +82,16 @@ router.post('/register', async (req: Request, res: Response) => {
             return res.status(200).json({ success: false, error: 'User resolve failed' });
         }
 
+        // businessId is a plain, non-secret string surfaced in every search
+        // result — without this check, anyone who's seen a business in the
+        // directory could re-register the same businessId from their own
+        // device and silently take over the listing (reassigning
+        // ownerDeviceId to themselves).
+        const existing = await Business.findOne({ where: { businessId } });
+        if (existing && existing.ownerDeviceId !== deviceId) {
+            return res.status(200).json({ success: false, error: 'This business is already registered to another device' });
+        }
+
         await Business.upsert({
             businessId,
             ownerDeviceId: deviceId,
@@ -273,6 +283,7 @@ router.get('/:businessId/can-share', async (req: Request, res: Response) => {
 
         res.json({ success: true, canShare: confirmed > 0 });
     } catch (e: any) {
+        logger.error(`❌ can-share check failed for business ${req.params.businessId}: ${e.message}`);
         res.status(200).json({ success: false, canShare: false, error: e.message });
     }
 });

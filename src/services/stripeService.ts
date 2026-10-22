@@ -69,6 +69,7 @@ export const handleStripeWebhook = async (rawBody: Buffer, signature: string): P
     }
 
     const event = getStripe().webhooks.constructEvent(rawBody, signature, webhookSecret);
+    logger.info(`💰 [STRIPE] Webhook received: ${event.type} (${event.id})`);
 
     if (event.type === 'checkout.session.completed') {
         const session = event.data.object as Stripe.Checkout.Session;
@@ -87,17 +88,24 @@ export const handleStripeWebhook = async (rawBody: Buffer, signature: string): P
         });
         await recomputeIsPro(deviceId);
         logger.info(`💰 [STRIPE] Granted ${addonId} to device ${deviceId}`);
+        return;
     }
 
     if (event.type === 'customer.subscription.deleted' || event.type === 'customer.subscription.updated') {
         const subscription = event.data.object as Stripe.Subscription;
         const row = await UserAddon.findOne({ where: { stripeSubscriptionId: subscription.id } });
-        if (!row) return;
+        if (!row) {
+            logger.warn(`⚠️ [STRIPE] ${event.type} for unknown subscription ${subscription.id} — no matching UserAddon row`);
+            return;
+        }
 
         const isActive = subscription.status === 'active' || subscription.status === 'trialing';
         row.status = isActive ? 'active' : 'canceled';
         await row.save();
         await recomputeIsPro(row.deviceId);
         logger.info(`💰 [STRIPE] ${row.addonId} for device ${row.deviceId} -> ${row.status} (subscription ${subscription.status})`);
+        return;
     }
+
+    logger.info(`💰 [STRIPE] Unhandled event type: ${event.type}`);
 };

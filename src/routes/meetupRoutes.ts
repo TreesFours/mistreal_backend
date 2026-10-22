@@ -5,6 +5,7 @@ import { getOrCreateUserInternal } from '../utils/userResolver';
 import { sendSocialAction } from '../services/socialService';
 import { MeetupProposal } from '../models/MeetupProposal';
 import { MeetupConfirmation } from '../models/MeetupConfirmation';
+import { Business } from '../models/businessModel';
 import { ComfortMeetConfirmation } from '../models/ComfortMeetConfirmation';
 import { EmergencyContact } from '../models/EmergencyContact';
 import { EmergencyAlert } from '../models/EmergencyAlert';
@@ -121,7 +122,12 @@ router.post('/', async (req: Request, res: Response) => {
         });
 
         if (counterpartyPlatform && counterpartyContactId) {
-            const respondUrl = `${appUrl()}/api/meetups/${meetup.id}/respond`;
+            // Keyed by the unguessable transactionToken, not the sequential
+            // DB id — this is a no-login link a non-app counterparty can
+            // act on, so the token itself has to be the only "auth" there
+            // is, otherwise anyone could enumerate ids to view the meeting
+            // location or accept/decline someone else's meetup.
+            const respondUrl = `${appUrl()}/api/meetups/${meetup.transactionToken}/respond`;
             const senderName = user.userName || 'A Mistreal user';
             const mapsLink = `https://www.google.com/maps?q=${latitude},${longitude}`;
             sendSocialAction(user, {
@@ -163,9 +169,9 @@ router.get('/by-token/:token', async (req: Request, res: Response) => {
 
 // ============== Public no-login respond page (counterparty) ==============
 
-router.get('/:id/respond', async (req: Request, res: Response) => {
+router.get('/:token/respond', async (req: Request, res: Response) => {
     try {
-        const meetup = await MeetupProposal.findByPk(req.params.id);
+        const meetup = await MeetupProposal.findOne({ where: { transactionToken: req.params.token } });
         if (!meetup) return res.status(404).send(renderMeetupPage({ title: 'Not found', body: '<p>This meetup request could not be found.</p>' }));
 
         if (meetup.status !== 'proposed') {
@@ -181,25 +187,25 @@ router.get('/:id/respond', async (req: Request, res: Response) => {
             body: `
                 <p>Proposed meeting at <strong>${escapeHtml(meetup.addressLabel || 'the shared location')}</strong> on <strong>${new Date(meetup.scheduledAt).toLocaleString()}</strong>.</p>
                 <p>Location: <a class="map-link" href="${mapsLink}" target="_blank">${mapsLink}</a></p>
-                <form method="POST" action="/api/meetups/${req.params.id}/respond" style="display:inline">
+                <form method="POST" action="/api/meetups/${req.params.token}/respond" style="display:inline">
                     <input type="hidden" name="action" value="accept" />
                     <button type="submit" class="btn btn-accept">Accept</button>
                 </form>
-                <form method="POST" action="/api/meetups/${req.params.id}/respond" style="display:inline">
+                <form method="POST" action="/api/meetups/${req.params.token}/respond" style="display:inline">
                     <input type="hidden" name="action" value="decline" />
                     <button type="submit" class="btn btn-decline">Decline</button>
                 </form>
             `
         }));
     } catch (e: any) {
-        logger.error(`❌ GET /meetups/:id/respond error: ${e.message}`);
+        logger.error(`❌ GET /meetups/:token/respond error: ${e.message}`);
         res.status(500).send('Something went wrong.');
     }
 });
 
-router.post('/:id/respond', async (req: Request, res: Response) => {
+router.post('/:token/respond', async (req: Request, res: Response) => {
     try {
-        const meetup = await MeetupProposal.findByPk(req.params.id);
+        const meetup = await MeetupProposal.findOne({ where: { transactionToken: req.params.token } });
         if (!meetup) return res.status(404).send(renderMeetupPage({ title: 'Not found', body: '<p>This meetup request could not be found.</p>' }));
         if (meetup.status === 'proposed') {
             meetup.status = req.body.action === 'accept' ? 'accepted' : 'declined';
@@ -212,7 +218,7 @@ router.post('/:id/respond', async (req: Request, res: Response) => {
                 : '<p>No problem — this meetup has been declined.</p>'
         }));
     } catch (e: any) {
-        logger.error(`❌ POST /meetups/:id/respond error: ${e.message}`);
+        logger.error(`❌ POST /meetups/:token/respond error: ${e.message}`);
         res.status(500).send('Something went wrong.');
     }
 });
@@ -229,6 +235,20 @@ router.post('/:id/confirm', async (req: Request, res: Response) => {
         }
         const meetup = await MeetupProposal.findByPk(req.params.id);
         if (!meetup) return res.status(200).json({ success: false, error: 'Meetup not found' });
+
+        // Same "this device is actually part of this meetup" guard
+        // comfort-ping already enforces — without it, anyone who knows (or
+        // guesses, since ids are sequential) a meetup id and the real
+        // buyer's/business's deviceId could file a fabricated confirmation
+        // in their place, which also permanently blocks that real
+        // participant from ever confirming (unique on meetupId+deviceId).
+        const isDirectParticipant = deviceId === meetup.proposerDeviceId || deviceId === meetup.counterpartyDeviceId;
+        const isBusinessOwner = meetup.businessId
+            ? !!(await Business.findOne({ where: { businessId: meetup.businessId, ownerDeviceId: deviceId } }))
+            : false;
+        if (!isDirectParticipant && !isBusinessOwner) {
+            return res.status(200).json({ success: false, error: 'This device is not part of this meetup' });
+        }
 
         let photoUrl: string | null = null;
         if (photoBase64) {

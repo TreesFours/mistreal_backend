@@ -10,7 +10,6 @@ import logger from '../utils/logger';
 
 const router = Router();
 
-const REVIEW_HOLD_BACK_MS = parseFloat(process.env.REVIEW_HOLD_BACK_MS || String(24 * 60 * 60 * 1000)); // 24h
 const REVIEW_REPLY_EXTENSION_MS = parseFloat(process.env.REVIEW_REPLY_EXTENSION_MS || String(14 * 24 * 60 * 60 * 1000)); // 14 days
 // Hiding is a ceiling on suppression, not real deletion — a hidden review
 // comes back on its own after this long regardless of exchange count.
@@ -74,8 +73,8 @@ router.post('/', async (req: Request, res: Response) => {
             businessId: businessId || null,
             contentText: contentText || null,
             voiceUrl,
-            status: 'pending',
-            publishAt: new Date(Date.now() + REVIEW_HOLD_BACK_MS)
+            status: 'published',
+            publishAt: new Date()
         });
 
         await ReviewThreadParticipant.bulkCreate([

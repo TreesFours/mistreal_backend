@@ -4,12 +4,15 @@ import { sequelize } from '../db';
 /**
  * A review one user leaves about another (specifically: about a business
  * owner, from that owner's business page — not about the business itself).
- * Deliberately held back, not published instantly: `publishAt` (set to 24h
- * after creation) is what gives the reviewee a real chance to see and
- * reply before anyone else can, rather than a courtesy notice with no
- * actual effect. No background sweep flips status at publishAt — every
- * read route computes effective visibility lazily (see reviewRoutes.ts),
- * since nothing needs to fire the instant that moment passes.
+ * Published immediately on creation (`status: 'published'`, `publishAt`
+ * set to the creation time) — there used to be a 24h hold-back before
+ * anyone but the reviewee could see it, giving them a private window to
+ * hide/delete before it went public, but that's been removed so reviews
+ * appear on the target's page right away. `publishAt`/`status: 'pending'`
+ * are kept around (GET /pending, PendingReviewsScreen) rather than ripped
+ * out, but nothing creates a 'pending' review anymore, so that surface is
+ * effectively dormant. No background sweep flips status — every read route
+ * computes effective visibility lazily (see reviewRoutes.ts).
  *
  * `expiresAt` is unrelated to publication — it only ever gets set once the
  * reviewee replies (see ReviewThreadMessage), extending how long this

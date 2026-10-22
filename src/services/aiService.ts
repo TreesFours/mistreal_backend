@@ -416,7 +416,7 @@ const generateImage = async (prompt: string, apiKey: string): Promise<AiResponse
  * confirm IMAGE_EDIT_MODEL_ID is still correct against a live account before
  * relying on this; Google renames/versions these relatively often.
  */
-const editImage = async (prompt: string, imageDatas: string[], mimeType: string, apiKey: string): Promise<AiResponse> => {
+const editImage = async (prompt: string, imageDatas: string[], mimeTypes: string[], apiKey: string): Promise<AiResponse> => {
     try {
         const response = await axios.post(
             `${GOOGLE_AI_BASE_URL}/models/${IMAGE_EDIT_MODEL_ID}:generateContent?key=${apiKey}`,
@@ -428,7 +428,7 @@ const editImage = async (prompt: string, imageDatas: string[], mimeType: string,
                     // influence the edit, instead of only ever seeing imageDatas[0].
                     parts: [
                         { text: prompt },
-                        ...imageDatas.map(data => ({ inline_data: { mime_type: mimeType, data } }))
+                        ...imageDatas.map((data, i) => ({ inline_data: { mime_type: mimeTypes[i] || 'image/jpeg', data } }))
                     ]
                 }],
                 generationConfig: { responseModalities: ['IMAGE'] }
@@ -597,11 +597,9 @@ export const getAiResponse = async (
     if (provider === IMAGE_EDIT_MODEL_ID) {
         if (!geminiKeyForGeneration) return { content: '', provider, success: false, error: 'Image editing is not configured.' };
         if (!imageDatas || imageDatas.length === 0) return { content: '', provider, success: false, error: 'Attach an image to edit.' };
-        // Same mime-type convention as GeminiProvider.chat — imageDatas doesn't
-        // carry its original mime type through the pipeline, only validated bytes.
         // All attached images go through (not just imageDatas[0]) so a character
         // reference image can actually influence the edit.
-        return editImage(prompt, imageDatas, 'image/jpeg', geminiKeyForGeneration);
+        return editImage(prompt, imageDatas, imageDatas.map((_, i) => imageMimeTypes?.[i] || 'image/jpeg'), geminiKeyForGeneration);
     }
     const domainConfig = DOMAIN_CONFIGS[provider];
     if (domainConfig) {
@@ -647,11 +645,12 @@ export const getAiResponse = async (
         // Only real images (not PDFs) can feed the pixel-editing step — a
         // PDF informs the clarifying conversation but isn't something
         // editImage/Gemini's image-edit model can riff on.
-        const sketchImageDatas = (imageDatas || []).filter((_, i) =>
-            (imageMimeTypes?.[i] || 'image/jpeg').startsWith('image/'));
+        const sketchEntries = (imageDatas || [])
+            .map((data, i) => ({ data, mimeType: imageMimeTypes?.[i] || 'image/jpeg' }))
+            .filter(e => e.mimeType.startsWith('image/'));
 
-        const imageResult = sketchImageDatas.length > 0
-            ? await editImage(renderPrompt, sketchImageDatas, 'image/jpeg', geminiKeyForGeneration)
+        const imageResult = sketchEntries.length > 0
+            ? await editImage(renderPrompt, sketchEntries.map(e => e.data), sketchEntries.map(e => e.mimeType), geminiKeyForGeneration)
             : await generateImage(renderPrompt, geminiKeyForGeneration);
 
         if (!imageResult.success) return { content: chatResult.content, provider, success: true, error: imageResult.error };

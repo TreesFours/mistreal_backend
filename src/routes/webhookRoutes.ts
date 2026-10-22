@@ -14,6 +14,7 @@ router.post('/zernio', async (req: Request, res: Response) => {
         logger.warn('🚫 Invalid Zernio Webhook Signature rejected.');
         return res.status(401).send('Invalid Signature');
     }
+    logger.info('✅ Zernio webhook signature verified.');
 
     // 2. Process Event (Asynchronous to respond to Zernio quickly)
     WebhookService.handleEvent(req.body).catch(err => {
