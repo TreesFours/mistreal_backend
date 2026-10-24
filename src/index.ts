@@ -78,6 +78,8 @@ import { recomputeIsPro, hasAddon } from './services/addonService';
 import { createCheckoutSession, handleStripeWebhook, createBillingPortalSession } from './services/stripeService';
 import { WatchSession } from './models/WatchSession'; // imported for Sequelize registration — table is created by sequelize.sync below
 import { registerWatchSignaling } from './services/watchSignalingService';
+import { registerCallSignaling } from './services/callSignalingService';
+import { registerLiveAiRelay } from './services/liveAiRelayService';
 import { renderWatchViewerPage } from './utils/watchViewerPage';
 import logger from './utils/logger';
 
@@ -91,6 +93,10 @@ const httpServer = http.createServer(app);
 // of Socket.IO on this same server.
 const io = new SocketIOServer(httpServer, { cors: { origin: '*' } });
 registerWatchSignaling(io);
+// 1:1 call signaling (its own '/call' namespace) — see callSignalingService.ts.
+registerCallSignaling(io);
+// Live AI voice+video relay (its own '/live-ai' namespace) — see liveAiRelayService.ts.
+registerLiveAiRelay(io);
 const port = process.env.PORT || 3000;
 const DATABASE_URL = process.env.DATABASE_URL;
 const upload = multer({

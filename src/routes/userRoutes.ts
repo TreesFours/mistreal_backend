@@ -2,8 +2,44 @@ import { Router, Request, Response } from 'express';
 import { User } from '../models/userModel';
 import { validate, userSettingsSchema } from '../middleware/validationMiddleware';
 import { authenticateUser } from '../utils/authMiddleware';
+import logger from '../utils/logger';
 
 const router = Router();
+
+/**
+ * Registers/refreshes this device's FCM token — used to wake a backgrounded
+ * app for an incoming call (see callSignalingService.ts's sendPushToDevice).
+ * Device-keyed like the rest of the app's non-social-auth endpoints
+ * (business/meetup/review routes), not gated behind authenticateUser, since
+ * a user doesn't need to be Firebase-signed-in to receive a call.
+ *
+ * Deliberately plain findOne, NOT getOrCreateUserInternal: that helper's
+ * firebaseUid-driven "repair" path reassigns deviceId onto an existing
+ * firebaseUid-matched row, which would let whoever can read/guess a
+ * victim's firebaseUid hijack their account's deviceId through this
+ * endpoint. That reassignment behavior is a pre-existing, app-wide trust
+ * decision shared by many other routes already — not something to silently
+ * change here — but this endpoint has no actual need for it: by the time a
+ * device registers a push token, it has already hit some other endpoint
+ * that created its User row, so there's nothing to create here, and
+ * sidestepping the helper closes this one additional attack surface for it.
+ */
+router.post('/fcm-token', async (req: Request, res: Response) => {
+    try {
+        const { deviceId, fcmToken } = req.body;
+        if (!deviceId || !fcmToken) {
+            return res.status(200).json({ success: false, error: 'deviceId and fcmToken are required' });
+        }
+        const user = await User.findOne({ where: { deviceId } });
+        if (!user) return res.status(200).json({ success: false, error: 'User not found for this device' });
+        user.fcmToken = fcmToken;
+        await user.save();
+        res.json({ success: true });
+    } catch (e: any) {
+        logger.error(`❌ POST /users/fcm-token error: ${e.message}`);
+        res.status(200).json({ success: false, error: e.message });
+    }
+});
 
 /**
  * 🛡️ STRATEGIC USER RESOLUTION

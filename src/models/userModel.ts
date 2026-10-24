@@ -78,6 +78,12 @@ export class User extends Model {
     // generating a new one from scratch.
     public activeImageGenConfigId!: number | null;
     public activeVideoGenConfigId!: number | null;
+
+    // Latest FCM registration token for this device — used to wake a
+    // backgrounded/killed app for an incoming call (see
+    // callSignalingService.ts). Overwritten wholesale on every refresh,
+    // never appended — only one token is ever valid per device at a time.
+    public fcmToken!: string | null;
 }
 
 User.init({
@@ -140,7 +146,8 @@ User.init({
     byokVideoModelName: { type: DataTypes.STRING, allowNull: true },
 
     activeImageGenConfigId: { type: DataTypes.INTEGER, allowNull: true },
-    activeVideoGenConfigId: { type: DataTypes.INTEGER, allowNull: true }
+    activeVideoGenConfigId: { type: DataTypes.INTEGER, allowNull: true },
+    fcmToken: { type: DataTypes.STRING, allowNull: true }
 }, {
     sequelize,
     modelName: 'User',
