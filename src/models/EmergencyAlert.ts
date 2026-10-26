@@ -31,6 +31,7 @@ export class EmergencyAlert extends Model {
     public nextCommunityBroadcastAt!: Date | null;
     public fullDetailAt!: Date | null;
     public resolvedAt!: Date | null;
+    public createdAt!: Date;
 }
 
 EmergencyAlert.init({
