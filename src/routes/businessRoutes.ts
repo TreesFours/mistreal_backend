@@ -66,6 +66,32 @@ router.post('/:businessId/owner-photo', async (req: Request, res: Response) => {
 });
 
 /**
+ * One-time upload for the business's own logo/cover photo — separate from
+ * owner-photo above (that's the person, this is the storefront). Same
+ * shape/pattern deliberately, so saveBusiness's routine re-saves never need
+ * to re-upload or risk clobbering this with null either.
+ */
+router.post('/:businessId/logo', async (req: Request, res: Response) => {
+    try {
+        const { deviceId, photoBase64, photoMimeType } = req.body;
+        if (!deviceId || !photoBase64) return res.status(200).json({ success: false, error: 'deviceId and photoBase64 are required' });
+
+        const business = await Business.findOne({ where: { businessId: req.params.businessId, ownerDeviceId: deviceId } });
+        if (!business) return res.status(200).json({ success: false, error: 'Business not found for this device' });
+
+        const buffer = Buffer.from(photoBase64, 'base64');
+        const url = await persistToStorage(deviceId, buffer, photoMimeType || 'image/jpeg', `business_logos/${req.params.businessId}_${Date.now()}.jpg`);
+        business.logoUrl = url;
+        await business.save();
+
+        res.json({ success: true, logoUrl: url });
+    } catch (e: any) {
+        logger.error(`❌ POST /business/:businessId/logo error: ${e.message}`);
+        res.status(200).json({ success: false, error: e.message });
+    }
+});
+
+/**
  * Upserts the server mirror. Previously name/logo/category only — extended
  * so a business is actually browsable/contactable by OTHER users, not just
  * a thin FK anchor for Ads.
