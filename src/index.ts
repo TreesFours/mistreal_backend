@@ -57,6 +57,7 @@ import emergencyRoutes from './routes/emergencyRoutes';
 import emailRoutes from './routes/emailRoutes';
 import marketRoutes from './routes/marketRoutes';
 import gameRoutes from './routes/gameRoutes';
+import { Game } from './models/Game';
 import { checkAlerts as checkMarketAlerts } from './services/marketDataService';
 import { MarketAlert } from './models/MarketAlert'; // imported for Sequelize registration — table is created by sequelize.sync below
 import { EmergencyContact } from './models/EmergencyContact'; // same — registration only
@@ -104,6 +105,27 @@ const upload = multer({
     limits: { fileSize: 15 * 1024 * 1024 } // 15MB tactical limit
 });
 
+// One-time catalog seed — the admin-key POST /games route is the only
+// other insert path, and nothing had ever used it, so Browse Games was
+// permanently empty. Only runs when the table is actually empty, so an
+// admin's own later additions (or deletions) are never overwritten.
+const seedGamesIfEmpty = async () => {
+    try {
+        const count = await Game.count();
+        if (count > 0) return;
+        await Game.bulkCreate([
+            { title: '2048', description: 'Slide numbered tiles to merge them into 2048.', category: 'Puzzle', sourceType: 'external', externalUrl: 'https://play2048.co/' },
+            { title: 'Tetris', description: 'The classic falling-block puzzle game.', category: 'Arcade', sourceType: 'external', externalUrl: 'https://tetris.com/play-tetris' },
+            { title: 'Solitaire', description: 'Classic Klondike solitaire.', category: 'Card', sourceType: 'external', externalUrl: 'https://www.solitaire.org/' },
+            { title: 'Slither', description: 'Grow your snake, avoid the others.', category: 'Arcade', sourceType: 'external', externalUrl: 'https://slither.io/' },
+            { title: 'Chess', description: 'Play chess against the computer or other players.', category: 'Strategy', sourceType: 'external', externalUrl: 'https://lichess.org/' }
+        ]);
+        console.log('✅ Seeded initial games catalog');
+    } catch (err: any) {
+        console.error('❌ Game seed failed:', err.message);
+    }
+};
+
 // 🗄️ Database Connection
 const initDb = async () => {
     if (DATABASE_URL) {
@@ -117,6 +139,7 @@ const initDb = async () => {
             await sequelize.authenticate();
             await sequelize.sync({ alter: true });
             console.log('✅ DB Initialized');
+            await seedGamesIfEmpty();
         } catch (err: any) {
             console.error('❌ DB Init Failed:', err.message);
         }
