@@ -55,6 +55,8 @@ import { getStoredMedia } from './utils/mediaStore';
 import aiProviderRoutes from './routes/aiProviderRoutes';
 import emergencyRoutes from './routes/emergencyRoutes';
 import emailRoutes from './routes/emailRoutes';
+import emailAccountRoutes from './routes/emailAccountRoutes';
+import { EmailAccountConfig } from './models/EmailAccountConfig'; // imported for Sequelize registration — table is created by sequelize.sync below
 import marketRoutes from './routes/marketRoutes';
 import gameRoutes from './routes/gameRoutes';
 import { Game } from './models/Game';
@@ -167,6 +169,7 @@ app.use('/api/user', userRoutes); // Combined /api/user/settings and /api/user/p
 app.use('/api/ai-provider', aiProviderRoutes);
 app.use('/api/emergency', emergencyRoutes);
 app.use('/api/email', emailRoutes);
+app.use('/api/email-account', emailAccountRoutes);
 app.use('/api/business', businessRoutes);
 app.use('/api/meetups', meetupRoutes);
 app.use('/api/reviews', reviewRoutes);
