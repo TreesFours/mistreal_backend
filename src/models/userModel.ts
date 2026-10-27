@@ -3,7 +3,12 @@ import { sequelize } from '../db';
 
 export class User extends Model {
     public id!: number;
-    public deviceId!: string;
+    // Nullable: when a different account takes over this ANDROID_ID (a
+    // reinstall + fresh signup, multiple accounts on one shared phone), this
+    // account releases its claim on the device rather than blocking the new
+    // one — see userResolver.ts. The account and all its data are untouched;
+    // it just stops being "the account on this device."
+    public deviceId!: string | null;
     public firebaseUid!: string;
     public isPro!: boolean;
     public subscriptionTier!: string;
@@ -87,7 +92,7 @@ export class User extends Model {
 }
 
 User.init({
-    deviceId: { type: DataTypes.STRING, allowNull: false, unique: true },
+    deviceId: { type: DataTypes.STRING, allowNull: true, unique: true },
     firebaseUid: { type: DataTypes.STRING, allowNull: true, unique: true },
     isPro: { type: DataTypes.BOOLEAN, defaultValue: false },
     subscriptionTier: { type: DataTypes.STRING, defaultValue: 'free' },
