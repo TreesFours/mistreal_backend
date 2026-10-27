@@ -71,8 +71,23 @@ export const refreshCuratedVideos = async () => {
 };
 
 export const getCachedVideos = async (limit: number = 20) => {
-    return await CachedYoutubeVideo.findAll({
+    const rows = await CachedYoutubeVideo.findAll({
         order: [['publishedAt', 'DESC']],
         limit
+    });
+    // Postgres BIGINT columns come back from pg/Sequelize as strings (safe
+    // for values beyond Number.MAX_SAFE_INTEGER) — view/like/comment counts
+    // never get remotely close to that range, so coercing back to a real
+    // number here is safe, and necessary: the client's Long fields fail to
+    // deserialize a JSON string, which silently emptied this feed entirely
+    // (caught by a bare try/catch with no logging on the client side).
+    return rows.map(row => {
+        const video = row.toJSON() as any;
+        return {
+            ...video,
+            viewCount: video.viewCount !== null ? Number(video.viewCount) : null,
+            likeCount: video.likeCount !== null ? Number(video.likeCount) : null,
+            commentCount: video.commentCount !== null ? Number(video.commentCount) : null
+        };
     });
 };
