@@ -611,7 +611,7 @@ export const getAiResponse = async (
         // Abuse-prevention safety valve, not a billing quota — see
         // domainRateLimiter.ts. Checked after the Pro gate (never blocks a
         // non-paying rejection early) and before spending a Gemini call.
-        const limitError = checkDomainRateLimit(user?.deviceId);
+        const limitError = checkDomainRateLimit(user?.deviceId ?? undefined);
         if (limitError) return { content: '', provider, success: false, error: limitError };
 
         // Always the app's own Gemini key, never the user's BYOK chat

@@ -107,11 +107,11 @@ router.post('/init-connection', optionalAuthenticateUser, async (req: Request, r
 
     try {
         // Generate a state containing the deviceId so we can map it back in callback
-        const state = Buffer.from(JSON.stringify({ deviceId: user.deviceId, platform: normPlatform })).toString('base64');
+        const state = Buffer.from(JSON.stringify({ deviceId, platform: normPlatform })).toString('base64');
         const baseUrl = process.env.APP_URL || 'https://mistreal-backend.onrender.com';
         const callbackUrl = `${baseUrl}/api/social/callback?state=${state}`;
 
-        const authUrl = await createConnectSession(normPlatform, user.deviceId, callbackUrl);
+        const authUrl = await createConnectSession(normPlatform, deviceId, callbackUrl);
         return res.status(200).json({ success: true, connectUrl: authUrl });
     } catch (error: any) {
         logger.error(`❌ init-connection failed for platform ${platform}: ${error.message}`);
