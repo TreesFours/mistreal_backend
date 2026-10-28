@@ -23,6 +23,18 @@ const CATEGORY_TAGS: Record<string, string[]> = {
     waterbody: ['natural.water'],
     'religious building': ['religion.place_of_worship'],
     parks: ['leisure.park'],
+    // The map's SCAN tab chips (restaurant/cafe/atm/hospital/police/
+    // pharmacy/gas_station) never had entries here at all — every one of
+    // them fell through to DEFAULT_TAGS below, so every chip returned the
+    // same generic commercial/office/service results regardless of which
+    // was tapped.
+    restaurant: ['catering.restaurant'],
+    cafe: ['catering.cafe'],
+    atm: ['service.financial.atm'],
+    hospital: ['healthcare.hospital'],
+    police: ['service.police'],
+    pharmacy: ['healthcare.pharmacy'],
+    gas_station: ['service.vehicle.fuel'],
 };
 
 const DEFAULT_TAGS = ['commercial', 'office', 'service'];

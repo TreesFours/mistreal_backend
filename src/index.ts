@@ -256,7 +256,7 @@ app.post('/api/chat', upload.fields([{ name: 'images', maxCount: 5 }, { name: 'a
         enhancedPrompt = `[CONTEXT: ${contextMetadata}]\n\nUser Question: ${prompt}`;
     }
 
-    const response = await getAiResponse(enhancedPrompt, provider || 'gemini-1.5-flash', history || [], user, imageDatas, audioData, videoData, imageRoles, confirmArchRender, archUnderstanding, imageMimeTypes);
+    const response = await getAiResponse(enhancedPrompt, provider || 'dynamic', history || [], user, imageDatas, audioData, videoData, imageRoles, confirmArchRender, archUnderstanding, imageMimeTypes);
 
     // 🛡️ AI NOTE: If you overhaul or fix logic here, log it in the "History & Notes" column of the Master Map.
     res.json(response);

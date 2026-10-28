@@ -279,7 +279,7 @@ export class WebhookService {
             const prompt = `AUTO_REPLY_MODE: A contact named ${sender} just sent you this on ${platform}: "${incomingContent}".
             Reply as ${user.aiPersona || 'Shadow'}. Be concise. Keep it tactical.`;
 
-            const aiResponse = await getAiResponse(prompt, 'gemini-1.5-flash', [], user);
+            const aiResponse = await getAiResponse(prompt, 'dynamic', [], user);
 
             if (aiResponse.success) {
                 const delayMs = (user.autoReplyDelay || 15) * 60000;

@@ -178,8 +178,18 @@ const rankModelStability = (model: any): number => {
     if (name.includes('latest')) score += 100;
     if (!name.includes('experimental') && !name.includes('preview')) score += 50;
 
-    // Performance Matrix
-    if (name.includes('1.5')) score += 30;
+    // Performance Matrix — was a hardcoded `includes('1.5')` check, so it
+    // never recognized any later generation (2.0, 2.5, ...) as better than
+    // an older one; Google ships a new generation faster than this file
+    // gets hand-edited. Extracts whichever "major.minor" version number
+    // actually appears in the name and scores it proportionally instead,
+    // so this stays correct without another manual patch next release.
+    const versionMatch = name.match(/(\d+)\.(\d+)/);
+    if (versionMatch) {
+        const major = parseInt(versionMatch[1], 10);
+        const minor = parseInt(versionMatch[2], 10);
+        score += Math.min(major * 10 + minor, 60);
+    }
     if (name.includes('pro')) score += 20;
 
     // Efficiency/Quota Matrix (Good for Free Tier)
@@ -214,9 +224,15 @@ export const getRankedGeminiModels = async (isPro: boolean = false): Promise<str
         candidates = sorted.filter((m: any) => m.name.toLowerCase().includes('flash')).map(cleanName);
     }
 
-    // Merge with defaults to ensure we always have valid IDs
-    const finalModels = Array.from(new Set([...candidates, ...defaults]));
-    return finalModels;
+    // Was an unconditional merge with the hardcoded defaults above, every
+    // single call — meaning long-deprecated model ids (gemini-1.5-*,
+    // gemini-1.0-pro) always sat in the final candidate list even when live
+    // discovery found perfectly good current models, and any caller using
+    // more than the first couple of candidates (getAiResponse's domain-config
+    // branch passes this whole list straight to GeminiProvider.chat) could
+    // genuinely land on a dead model id. Only reached now if live discovery
+    // actually found nothing in this tier at all.
+    return candidates.length > 0 ? candidates : defaults;
 };
 
 export const getAvailableModels = async (isPro: boolean, freeUserCount: number = 1, proUserCount: number = 1) => {
