@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { isPlatformMatching } from '../../utils/platformId';
 
 const ZERNIO_API_URL = 'https://zernio.com/api/v1'; // Official Base URL
 const getApiKey = () => process.env.ZERNIO_API_KEY || '';
@@ -226,7 +227,13 @@ export const ZernioAdapter = {
       });
       const accounts = accountsResp.data?.accounts || accountsResp.data?.data || accountsResp.data || [];
 
-      const account = accounts.find((a: any) => a.platform === platform);
+      // Was a strict === — Zernio's /accounts response doesn't necessarily
+      // spell a platform the same way the client does (casing, "x" vs
+      // "twitter", etc.), while connection/reconciliation elsewhere already
+      // normalizes before comparing. That mismatch meant an account could
+      // show as connected (reconciliation tolerates it) while every post
+      // failed here with "not linked to this profile."
+      const account = accounts.find((a: any) => isPlatformMatching(a.platform || a.type || '', platform));
       if (!account) throw new Error(`${platform} not linked to this profile.`);
       const accountId = account.id || account.accountId || account._id;
 

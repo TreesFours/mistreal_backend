@@ -8,6 +8,7 @@ import { TwitterOAuth } from './socialPlatforms/twitterAuth';
 import { YoutubeNativeAuth } from './socialPlatforms/youtubeNative';
 import { getPlatformLimit } from './addonService';
 import logger from '../utils/logger';
+import { normalizePlatformId, isPlatformMatching } from '../utils/platformId';
 
 export const getAvailablePlatforms = async (isPro: boolean) => {
     return getAvailablePlatformDefinitions(isPro).map((def: any) => ({
@@ -272,25 +273,10 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
 /**
  * 🔄 Helper: Normalize platform aliases between Zernio API and Mistreal app IDs
  */
-export const normalizePlatformId = (platform: string): string => {
-    if (!platform) return '';
-    const lower = platform.toLowerCase().trim();
-    if (lower === 'x' || lower === 'twitter') return 'twitter';
-    if (lower.startsWith('linkedin')) return 'linkedin';
-    if (lower.startsWith('facebook')) return 'facebook';
-    if (lower.startsWith('instagram')) return 'instagram';
-    if (lower.startsWith('whatsapp')) return 'whatsapp';
-    if (lower.startsWith('youtube')) return 'youtube';
-    if (lower.startsWith('tiktok')) return 'tiktok';
-    if (lower.startsWith('telegram')) return 'telegram';
-    if (lower.startsWith('discord')) return 'discord';
-    if (lower.startsWith('reddit')) return 'reddit';
-    return lower;
-};
-
-export const isPlatformMatching = (platformA: string, platformB: string): boolean => {
-    return normalizePlatformId(platformA) === normalizePlatformId(platformB);
-};
+// Moved to utils/platformId.ts (zernioAdapter.ts needs these too, and
+// importing back from this file would be circular). Re-exported here so
+// every existing `from './socialService'` import keeps working unchanged.
+export { normalizePlatformId, isPlatformMatching };
 
 /**
  * 🔗 Headless Zernio Session: Bypasses their dashboard with fallback routing
