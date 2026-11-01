@@ -61,7 +61,7 @@ export const userSettingsSchema = z.object({
         deviceId: z.string({ required_error: "deviceId is required" }),
         firebaseUid: z.string().optional(),
         userName: z.string().optional(),
-        aiPersona: z.string().optional(),
+        aiPersona: z.string().max(200, "aiPersona is too long").optional(),
         autoReplyDelay: z.number().optional(),
         guardianEnabled: z.boolean().optional(),
         aiAutoSendEnabled: z.boolean().optional(),
