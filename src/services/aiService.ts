@@ -825,9 +825,10 @@ export const getAiResponse = async (
 
     const orModels = [
         activeProvider === 'dynamic' || activeProvider.includes('gemini-flash-1.5') ? 'google/gemini-flash-1.5' : activeProvider,
-        'google/gemini-flash-1.5-8b',
-        'anthropic/claude-3-haiku',
-        'meta-llama/llama-3-8b-instruct:free'
+        'meta-llama/llama-3.3-70b-instruct:free',
+        'meta-llama/llama-3.1-8b-instruct:free',
+        'deepseek/deepseek-r1:free',
+        'google/gemini-2.0-flash-exp:free'
     ];
 
     const orHistory = history.map((m: any) => ({ role: m.role, content: m.content }));

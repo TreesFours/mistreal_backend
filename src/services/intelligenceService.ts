@@ -55,14 +55,14 @@ export class IntelligenceService {
             const pinnedTitles = pinned.map((p: any) => p.itemTitle);
 
             // 5. Prepare Categories (Filtering out pinned items so they don't appear twice)
-            const limit = fastLoad ? 3 : 15;
+            const limit = fastLoad ? 10 : 25;
             const news = (newsBuffer?.items || []).filter((i: any) => !pinnedTitles.includes(i.title)).slice(0, limit);
-            const novels = (novelBuffer?.items || []).filter((i: any) => !pinnedTitles.includes(i.title)).slice(0, 3);
-            const wikis = (wikiBuffer?.items || []).filter((i: any) => !pinnedTitles.includes(i.title)).slice(0, 3);
-            const journals = (journalBuffer?.items || []).filter((i: any) => !pinnedTitles.includes(i.title)).slice(0, 3);
+            const novels = (novelBuffer?.items || []).filter((i: any) => !pinnedTitles.includes(i.title)).slice(0, 5);
+            const wikis = (wikiBuffer?.items || []).filter((i: any) => !pinnedTitles.includes(i.title)).slice(0, 5);
+            const journals = (journalBuffer?.items || []).filter((i: any) => !pinnedTitles.includes(i.title)).slice(0, 5);
             const astro = (astroBuffer?.items || []).filter((i: any) => !pinnedTitles.includes(i.title)).slice(0, limit);
             const socials = socialItems.filter((i: any) => !pinnedTitles.includes(i.title)).slice(0, limit);
-            const sports = (sportsBuffer?.items || []).filter((i: any) => !pinnedTitles.includes(i.title)).slice(0, 10);
+            const sports = (sportsBuffer?.items || []).filter((i: any) => !pinnedTitles.includes(i.title)).slice(0, 15);
 
             // 6. Interleave Logic (The Rhythm)
             const interleaved: any[] = [];
