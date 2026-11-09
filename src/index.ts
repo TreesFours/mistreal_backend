@@ -114,15 +114,34 @@ const upload = multer({
 const seedGamesIfEmpty = async () => {
     try {
         const count = await Game.count();
-        if (count > 0) return;
+        if (count > 0) {
+            // Update existing records with thumbnails if missing
+            await Game.update(
+                { thumbnailUrl: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=400' },
+                { where: { title: '2048', thumbnailUrl: null } }
+            );
+            await Game.update(
+                { thumbnailUrl: 'https://images.unsplash.com/photo-1550745165-9bc0b252726f?w=400' },
+                { where: { title: 'Tetris', thumbnailUrl: null } }
+            );
+            await Game.update(
+                { thumbnailUrl: 'https://images.unsplash.com/photo-1529699211952-734e80c4d42b?w=400' },
+                { where: { title: 'Chess', thumbnailUrl: null } }
+            );
+            return;
+        }
+
         await Game.bulkCreate([
-            { title: '2048', description: 'Slide numbered tiles to merge them into 2048.', category: 'Puzzle', sourceType: 'external', externalUrl: 'https://play2048.co/' },
-            { title: 'Tetris', description: 'The classic falling-block puzzle game.', category: 'Arcade', sourceType: 'external', externalUrl: 'https://tetris.com/play-tetris' },
-            { title: 'Solitaire', description: 'Classic Klondike solitaire.', category: 'Card', sourceType: 'external', externalUrl: 'https://www.solitaire.org/' },
-            { title: 'Slither', description: 'Grow your snake, avoid the others.', category: 'Arcade', sourceType: 'external', externalUrl: 'https://slither.io/' },
-            { title: 'Chess', description: 'Play chess against the computer or other players.', category: 'Strategy', sourceType: 'external', externalUrl: 'https://lichess.org/' }
+            { title: '2048', description: 'Slide numbered tiles to merge them into 2048.', category: 'Puzzle', sourceType: 'external', externalUrl: 'https://play2048.co/', thumbnailUrl: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=400' },
+            { title: 'Tetris Arcade', description: 'The classic falling-block puzzle game.', category: 'Arcade', sourceType: 'external', externalUrl: 'https://tetris.com/play-tetris', thumbnailUrl: 'https://images.unsplash.com/photo-1550745165-9bc0b252726f?w=400' },
+            { title: 'Pac-Man Classic', description: 'Navigate the maze, eat dots, and outsmart ghosts.', category: 'Action', sourceType: 'external', externalUrl: 'https://freepacman.org/', thumbnailUrl: 'https://images.unsplash.com/photo-1579373903781-fd5c0c30c4cd?w=400' },
+            { title: 'Space Invaders', description: 'Defend Earth against invading alien armadas.', category: 'Action', sourceType: 'external', externalUrl: 'https://freeinvaders.org/', thumbnailUrl: 'https://images.unsplash.com/photo-1511512578047-dfb367046420?w=400' },
+            { title: 'Doom HTML5', description: 'Classic 3D first-person shooter in browser.', category: 'Action', sourceType: 'external', externalUrl: 'https://silveiraneto.net/doom/', thumbnailUrl: 'https://images.unsplash.com/photo-1542751371-adc38448a05e?w=400' },
+            { title: 'Slither.io', description: 'Grow your snake, avoid the others.', category: 'Arcade', sourceType: 'external', externalUrl: 'https://slither.io/', thumbnailUrl: 'https://images.unsplash.com/photo-1614680376593-902f749f71c3?w=400' },
+            { title: 'Chess Master', description: 'Play chess against AI or real opponents.', category: 'Strategy', sourceType: 'external', externalUrl: 'https://lichess.org/', thumbnailUrl: 'https://images.unsplash.com/photo-1529699211952-734e80c4d42b?w=400' },
+            { title: 'Super Mario HTML5', description: 'Run, jump, and collect coins in Super Mario.', category: 'Arcade', sourceType: 'external', externalUrl: 'https://supermarioplay.com/', thumbnailUrl: 'https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=400' }
         ]);
-        console.log('✅ Seeded initial games catalog');
+        console.log('✅ Seeded initial rich games catalog with images & action games');
     } catch (err: any) {
         console.error('❌ Game seed failed:', err.message);
     }

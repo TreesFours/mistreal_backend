@@ -5,14 +5,22 @@ import { AiProvider, ProviderChatRequest, ProviderChatResponse } from './types';
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const REQUEST_TIMEOUT_MS = 15000;
 
+const normalizeOpenRouterModel = (modelId: string): string => {
+    if (!modelId) return 'meta-llama/llama-3.3-70b-instruct:free';
+    const lower = modelId.toLowerCase();
+    if (lower.includes('llama-3-8b-instruct')) return 'meta-llama/llama-3.1-8b-instruct:free';
+    return modelId;
+};
+
 /** App-key path only (curated models) — BYOK never uses OpenRouter as a provider type. */
 export const OpenRouterProvider: AiProvider = {
     id: 'openrouter',
     chat: async (req: ProviderChatRequest): Promise<ProviderChatResponse> => {
-        const candidates = req.modelCandidates && req.modelCandidates.length > 0
+        const rawCandidates = req.modelCandidates && req.modelCandidates.length > 0
             ? req.modelCandidates
             : (req.modelId ? [req.modelId] : []);
 
+        const candidates = rawCandidates.map(normalizeOpenRouterModel);
         let lastError = '';
 
         for (const modelId of candidates) {
@@ -54,7 +62,7 @@ export const OpenRouterProvider: AiProvider = {
             content: '',
             modelUsed: '',
             success: false,
-            error: `PROVIDER_ERROR: ${lastError} (Checked ${candidates.length} models)`
+            error: `Model currently unavailable: ${lastError}. Please select another active model from the AI menu.`
         };
     }
 };
