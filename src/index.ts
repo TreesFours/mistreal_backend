@@ -172,14 +172,12 @@ app.use(helmet());
 app.use(cors());
 app.use(morgan('dev'));
 app.use(express.json({
+    limit: '100mb',
     verify: (req: any, res, buf) => {
         req.rawBody = buf;
     }
 }));
-// Needed for the plain HTML <form method="POST"> confirm/response pages in
-// emergencyRoutes.ts — those submit as application/x-www-form-urlencoded,
-// not JSON, since they're meant to work for someone with no app installed.
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
 // 🔗 Core Routes
 app.use('/api/social', socialRoutes);
@@ -197,13 +195,11 @@ app.use('/api/needs', needRoutes);
 app.use('/api/ads', adRoutes);
 app.use('/api/markets', marketRoutes);
 app.use('/api/games', gameRoutes);
-// Static files for self-hosted games (Game.sourceType === 'hosted') — each
-// lives at backend/public/games/<hostedSlug>/index.html, resolved into a
-// full playUrl by gameRoutes.ts so the client never sees this path directly.
 app.use('/games-static', express.static(path.join(__dirname, '../public/games')));
 
 app.get('/', (req, res) => res.send('🚀 Mistreal Backend Running'));
-app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date() }));
+app.get('/health', (req, res) => res.json({ status: 'ok', success: true, timestamp: new Date() }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', success: true, timestamp: new Date() }));
 
 // 🖼️ Short-lived media host — see mediaStore.ts. Lets AI-generated/edited
 // images (which only exist as base64 in a chat response) be handed to Zernio

@@ -157,6 +157,41 @@ const PLATFORM_DEFINITIONS: Record<string, SocialPlatformDefinition> = {
     icon: '🎮',
     color: '#9146FF',
     capabilities: { ...READ_ONLY_FEED, supportsComments: true }
+  },
+  wordpress: {
+    id: 'wordpress',
+    displayName: 'WordPress',
+    icon: '📝',
+    color: '#21759B',
+    capabilities: { ...FULL_SOCIAL, supportsStories: false, supportsReels: false, supportsDM: false }
+  },
+  pinterest: {
+    id: 'pinterest',
+    displayName: 'Pinterest',
+    icon: '📌',
+    color: '#E60023',
+    capabilities: { ...FULL_SOCIAL, supportsStories: false, supportsReels: false, supportsDM: false }
+  },
+  googlebusiness: {
+    id: 'googlebusiness',
+    displayName: 'Google Business',
+    icon: '🏪',
+    color: '#4285F4',
+    capabilities: { ...FULL_SOCIAL, supportsStories: false, supportsReels: false }
+  },
+  threads: {
+    id: 'threads',
+    displayName: 'Threads',
+    icon: '🧵',
+    color: '#000000',
+    capabilities: FULL_SOCIAL
+  },
+  medium: {
+    id: 'medium',
+    displayName: 'Medium',
+    icon: '✍️',
+    color: '#000000',
+    capabilities: { ...FULL_SOCIAL, supportsStories: false, supportsReels: false, supportsDM: false }
   }
 };
 
