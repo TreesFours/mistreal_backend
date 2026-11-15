@@ -69,12 +69,39 @@ export interface DiscoveryOutcome {
 
 export const getNearbyPlaces = async (lat: number, lon: number, radius: number, category: string): Promise<DiscoveryOutcome> => {
     const apiKey = process.env.GEOAPIFY_API_KEY;
+    const safeRadius = Math.min(Math.max(radius, 50), 5000);
+
     if (!apiKey) {
-        logger.error('❌ Discovery Service Error: GEOAPIFY_API_KEY is not set');
-        return { results: [], succeeded: false };
+        logger.warn('⚠️ GEOAPIFY_API_KEY is not set — using Nominatim fallback');
+        try {
+            const nomUrl = 'https://nominatim.openstreetmap.org/search';
+            const response = await axios.get(nomUrl, {
+                params: {
+                    format: 'json',
+                    q: category,
+                    lat,
+                    lon,
+                    limit: 25,
+                    addressdetails: 1
+                },
+                headers: { 'User-Agent': 'MistrealApp/1.0 (Android)' },
+                timeout: 8000
+            });
+            const results: DiscoveryPoi[] = (response.data || []).map((item: any) => ({
+                name: item.display_name?.split(',')[0] || item.name || category,
+                address: item.display_name || 'Address unavailable',
+                category,
+                latitude: parseFloat(item.lat),
+                longitude: parseFloat(item.lon),
+                website: item.extratags?.website
+            }));
+            return { results, succeeded: true };
+        } catch (e: any) {
+            logger.error(`❌ Nominatim Fallback Error: ${e.message}`);
+            return { results: [], succeeded: false };
+        }
     }
 
-    const safeRadius = Math.min(Math.max(radius, 50), 5000);
     const categories = resolveTags(category).join(',');
 
     try {

@@ -429,20 +429,52 @@ app.get('/api/intel/location-photo', async (req, res) => {
     }
 });
 
-// 🔎 Nearby Discovery (real OSM points of interest, radius-aware)
+// 🔎 Nearby Discovery (real OSM points of interest + app-registered businesses)
 app.get('/api/discovery/nearby', async (req, res) => {
     const { lat, lon, radius, category } = req.query;
     if (lat === undefined || lon === undefined || !category) {
         return res.status(400).json({ success: false, error: 'lat, lon, and category are required' });
     }
 
-    const outcome = await getNearbyPlaces(
-        Number(lat),
-        Number(lon),
-        radius !== undefined ? Number(radius) : 1000,
-        String(category)
-    );
-    res.json({ results: outcome.results, succeeded: outcome.succeeded });
+    const nLat = Number(lat);
+    const nLon = Number(lon);
+    const nRadiusKm = (radius !== undefined ? Number(radius) : 1000) / 1000.0;
+    const catStr = String(category);
+
+    const outcome = await getNearbyPlaces(nLat, nLon, nRadiusKm * 1000, catStr);
+
+    // Merge registered businesses matching category or location
+    let registeredPoi: any[] = [];
+    try {
+        const businesses = await Business.findAll({ limit: 50 });
+        registeredPoi = businesses
+            .filter(b => b.latitude != null && b.longitude != null)
+            .filter(b => {
+                const dLat = (b.latitude! - nLat) * 111.32;
+                const dLon = (b.longitude! - nLon) * (111.32 * Math.cos(nLat * Math.PI / 180));
+                const distKm = Math.sqrt(dLat * dLat + dLon * dLon);
+                const matchesCat = catStr.toLowerCase() === 'all' ||
+                    b.category.toLowerCase().includes(catStr.toLowerCase()) ||
+                    catStr.toLowerCase().includes(b.category.toLowerCase());
+                return distKm <= nRadiusKm && matchesCat;
+            })
+            .map(b => ({
+                name: `⭐ ${b.name}`,
+                address: b.address || 'Registered App Business',
+                category: b.category,
+                latitude: b.latitude!,
+                longitude: b.longitude!,
+                website: b.website || undefined,
+                contactPhone: b.phone || undefined,
+                contactEmail: b.email || undefined,
+                businessId: b.businessId
+            }));
+    } catch (e: any) {
+        logger.error(`❌ Business Discovery Merge Error: ${e.message}`);
+    }
+
+    const merged = [...registeredPoi, ...outcome.results];
+    res.json({ results: merged, succeeded: outcome.succeeded || registeredPoi.length > 0 });
 });
 
 // 📍 Location Update Endpoint
@@ -670,6 +702,9 @@ function getCompassDirection(bearing: number): string {
 }
 
 // ⏳ Background Worker: Intelligence Engine
+// Initial startup execution so buffers populate immediately on boot/deploy
+IntelligenceService.refreshGlobalIntel().catch(e => console.error('❌ Initial Global Intel Error:', e));
+
 setInterval(async () => {
     try {
         await IntelligenceService.refreshGlobalIntel();

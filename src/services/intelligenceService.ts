@@ -4,7 +4,8 @@ import logger from '../utils/logger';
 import { IntelligenceBuffer, User, SocialEvent } from '../models/userModel';
 import { PinnedIntel } from '../models/PinnedIntel';
 import { getWeatherData } from './weatherService';
-import { getDetailedAstroData } from './astroService';
+import { getDetailedAstroData, getNasaApod, getSpaceNews } from './astroService';
+import { getLiveDisasters } from './disasterService';
 
 /**
  * 🛰️ STRATEGIC INTELLIGENCE SERVICE
@@ -174,8 +175,39 @@ export class IntelligenceService {
             this.refreshLiterature(),
             this.refreshWiki(),
             this.refreshJournals(),
-            this.refreshSports()
+            this.refreshSports(),
+            this.refreshDisasters()
         ]);
+    }
+
+    /**
+     * 🌋 LIVE GLOBAL DISASTERS & HAZARDS (USGS Earthquakes + GDACS Hazards)
+     */
+    static async refreshDisasters() {
+        try {
+            const disasters = await getLiveDisasters();
+            const items = disasters.map(d => ({
+                title: d.title,
+                description: `${d.severity} ${d.type.toUpperCase()} · Location: ${d.locationName}${d.magnitude ? ` · M${d.magnitude}` : ''}`,
+                url: d.url,
+                source: d.type === 'earthquake' ? 'USGS Earthquake Science' : 'GDACS Disaster Alert',
+                category: d.type,
+                timestamp: d.timestamp,
+                metadata: {
+                    latitude: d.latitude,
+                    longitude: d.longitude,
+                    severity: d.severity,
+                    disasterType: d.type,
+                    magnitude: d.magnitude
+                }
+            }));
+            if (items.length > 0) {
+                await this.replaceBuffer('disasters', items);
+                logger.info(`🌋 [Disasters] Buffer updated: ${items.length} hazard alerts`);
+            }
+        } catch (e: any) {
+            logger.warn(`⚠️ [Disasters] Refresh Warning: ${e.message}`);
+        }
     }
 
     /**
@@ -242,27 +274,56 @@ export class IntelligenceService {
 
     private static async refreshNews() {
         const apiKey = process.env.NEWS_API_KEY;
-        const categories = ['general', 'entertainment', 'technology', 'science', 'sports'];
         const allArticles: any[] = [];
 
+        // 🏙️ Step 1: Hyper-Local City News via Google News RSS (Keyless, 100% Free)
+        try {
+            const activeUser = await User.findOne({
+                where: { lastKnownCity: { [Op.ne]: null } },
+                order: [['lastLocationUpdate', 'DESC']]
+            });
+            const city = activeUser?.lastKnownCity || 'World';
+            const rssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(city)}&hl=en-US&gl=US&ceid=US:en`;
+
+            const rssResponse = await axios.get(rssUrl, { timeout: 8000 });
+            const xml = rssResponse.data || '';
+            const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
+
+            items.slice(0, 10).forEach((itemXml: string) => {
+                const titleMatch = itemXml.match(/<title>([\s\S]*?)<\/title>/);
+                const linkMatch = itemXml.match(/<link>([\s\S]*?)<\/link>/);
+                const pubDateMatch = itemXml.match(/<pubDate>([\s\S]*?)<\/pubDate>/);
+                const sourceMatch = itemXml.match(/<source[\s\S]*?>([\s\S]*?)<\/source>/);
+
+                if (titleMatch && linkMatch) {
+                    const rawTitle = titleMatch[1].replace(/<!\[CDATA\[|\]\]>/g, '').trim();
+                    const link = linkMatch[1].trim();
+                    const source = sourceMatch ? sourceMatch[1].trim() : 'Google News';
+                    const pubDate = pubDateMatch ? new Date(pubDateMatch[1]).toISOString() : new Date().toISOString();
+
+                    allArticles.push({
+                        title: `[${city}] ${rawTitle}`,
+                        description: `Local news report for ${city} via ${source}.`,
+                        url: link,
+                        imageUrl: null,
+                        source,
+                        category: 'local',
+                        timestamp: pubDate
+                    });
+                }
+            });
+        } catch (e: any) {
+            logger.warn(`⚠️ Google News RSS fetch warning: ${e.message}`);
+        }
+
+        // 🌍 Step 2: Global Headlines via NewsAPI if configured
         if (apiKey) {
             try {
-                // This is one shared buffer for every user (see updateBuffer below), so
-                // there's no single "the" user to localize for — real signal, but
-                // necessarily coarse: use whichever active user's device most recently
-                // reported a location, rather than a hardcoded 'us'. NewsAPI only
-                // supports country-level granularity anyway, not city/radius.
-                const mostRecentLocation = await User.findOne({
-                    where: { lastKnownCountry: { [Op.ne]: null } },
-                    order: [['lastLocationUpdate', 'DESC']]
-                });
-                const country = mostRecentLocation?.lastKnownCountry?.toLowerCase() || 'us';
-
-                // Fetch all categories in parallel
+                const categories = ['general', 'technology', 'science'];
                 const results = await Promise.allSettled(
                     categories.map(cat =>
                         axios.get(`https://newsapi.org/v2/top-headlines`, {
-                            params: { category: cat, country, apiKey },
+                            params: { category: cat, country: 'us', apiKey },
                             timeout: 8000
                         })
                     )
@@ -288,7 +349,7 @@ export class IntelligenceService {
             }
         }
 
-        // Fallback default news if API key missing or requests failed/returned empty
+        // Fallback default news if all lookups yielded 0 articles
         if (allArticles.length === 0) {
             logger.info('📌 Injecting fallback default news articles into Intelligence Buffer.');
             allArticles.push(
@@ -307,14 +368,6 @@ export class IntelligenceService {
                     source: "Mistreal Security",
                     category: "science",
                     timestamp: new Date().toISOString()
-                },
-                {
-                    title: "[Intelligence] Autonomous Agent Swarms Coordinate Local Operations",
-                    description: "Autonomous background agents successfully manage localized emergency routing and resource dispatch.",
-                    url: "https://mistreal.ai/intel/autonomous-swarms",
-                    source: "Mistreal Ops",
-                    category: "general",
-                    timestamp: new Date().toISOString()
                 }
             );
         }
@@ -324,23 +377,54 @@ export class IntelligenceService {
 
     private static async refreshAstro() {
         try {
-            // General Astro Intel (using 0,0 as baseline)
+            const astroItems: any[] = [];
+
+            // 1. Fetch NASA Picture of the Day (APOD)
+            const apod = await getNasaApod();
+            if (apod) {
+                astroItems.push({
+                    title: `[NASA APOD] ${apod.title}`,
+                    description: apod.explanation.length > 250 ? apod.explanation.substring(0, 247) + '...' : apod.explanation,
+                    url: apod.hdurl || apod.url,
+                    imageUrl: apod.mediaType === 'image' ? apod.url : null,
+                    source: 'NASA APOD',
+                    timestamp: new Date().toISOString(),
+                    metadata: { apodDate: apod.date, mediaType: apod.mediaType }
+                });
+            }
+
+            // 2. Fetch Live Spaceflight & Orbital News
+            const spaceNews = await getSpaceNews();
+            spaceNews.slice(0, 5).forEach(a => {
+                astroItems.push({
+                    title: `[Spaceflight] ${a.title}`,
+                    description: a.summary.length > 250 ? a.summary.substring(0, 247) + '...' : a.summary,
+                    url: a.url,
+                    imageUrl: a.imageUrl || null,
+                    source: a.newsSite || 'Spaceflight News',
+                    timestamp: a.publishedAt || new Date().toISOString()
+                });
+            });
+
+            // 3. Moon & Planetary Vectors
             const data = await getDetailedAstroData(0, 0);
-            if (!data) return;
+            if (data) {
+                astroItems.push({
+                    title: `[Astro] ${data.moon.phase} phase`,
+                    description: `Current Moon state: ${data.moon.phase}. ${data.summary}`,
+                    url: data.moon.imageUrl || "https://api.astronomyapi.com",
+                    source: 'Astronomy Intelligence',
+                    timestamp: new Date().toISOString(),
+                    metadata: {
+                        moonPhase: data.moon.phase,
+                        planets: data.planets.filter((p: any) => p.isVisible).map((p: any) => p.name).join(', ')
+                    }
+                });
+            }
 
-            const astroItem = {
-                title: `[Astro] ${data.moon.phase} phase`,
-                description: `Current Moon state: ${data.moon.phase}. ${data.summary}`,
-                url: data.moon.imageUrl || "https://api.astronomyapi.com",
-                source: 'Astronomy Intelligence',
-                timestamp: new Date().toISOString(),
-                metadata: {
-                    moonPhase: data.moon.phase,
-                    planets: data.planets.filter((p: any) => p.isVisible).map((p: any) => p.name).join(', ')
-                }
-            };
-
-            await this.updateBuffer('astro', [astroItem]);
+            if (astroItems.length > 0) {
+                await this.updateBuffer('astro', astroItems);
+            }
         } catch (e: any) {
             logger.warn(`⚠️ [Intel] refreshAstro failed: ${e.message}`);
         }
@@ -353,23 +437,31 @@ export class IntelligenceService {
                 defaults: { category: 'wiki', items: [] }
             });
 
-            // Calendar-day boundary (not a rolling N-day window) so exactly one
-            // new article appears per day, instead of under-delivering on a
-            // raw "4 days since last refresh" timer.
             const lastUpdatedDate = new Date(buffer.lastUpdated).toDateString();
             const todayDate = new Date().toDateString();
 
-            if (lastUpdatedDate === todayDate && (buffer.items || []).length >= 1) return;
+            if (lastUpdatedDate === todayDate && (buffer.items || []).length >= 3) return;
 
-            const response = await axios.get('https://en.wikipedia.org/api/rest_v1/page/random/summary');
-            const article = [{
-                title: `[Wiki] ${response.data.title}`,
-                description: response.data.extract,
-                url: response.data.content_urls.desktop.page,
-                source: 'Wikipedia',
-                timestamp: new Date().toISOString()
-            }];
-            await this.updateBuffer('wiki', article, 5); // keep a few days of history even though it refreshes daily
+            const articles: any[] = [];
+            for (let i = 0; i < 3; i++) {
+                try {
+                    const response = await axios.get('https://en.wikipedia.org/api/rest_v1/page/random/summary', { timeout: 5000 });
+                    if (response.data && response.data.title) {
+                        articles.push({
+                            title: `[Wiki] ${response.data.title}`,
+                            description: response.data.extract || 'Wikipedia summary',
+                            url: response.data.content_urls?.desktop?.page || `https://en.wikipedia.org/wiki/${encodeURIComponent(response.data.title)}`,
+                            imageUrl: response.data.thumbnail?.source || null,
+                            source: 'Wikipedia',
+                            timestamp: new Date().toISOString()
+                        });
+                    }
+                } catch (err) {}
+            }
+
+            if (articles.length > 0) {
+                await this.updateBuffer('wiki', articles, 5);
+            }
         } catch (e: any) {
             logger.warn(`⚠️ [Intel] refreshWiki failed: ${e.message}`);
         }
@@ -377,26 +469,43 @@ export class IntelligenceService {
 
     private static async refreshJournals() {
         try {
-            // Fetching from a random scholarly source or ArXiv
-            const response = await axios.get('https://export.arxiv.org/api/query?search_query=all:electron&start=0&max_results=3');
-            // Basic XML parsing would be needed here for ArXiv, assuming we have a helper or simpler JSON source
-            const journals = [{
-                title: "[Journal] Quantum Field Dynamics",
-                description: "A deep dive into electron behavioral patterns in sub-zero environments.",
-                url: "https://arxiv.org/abs/2101.00001",
-                source: "ArXiv",
-                timestamp: new Date().toISOString()
-            }];
-            await this.updateBuffer('journals', journals);
+            // Live ArXiv API XML Query for AI, Physics, and Biology papers
+            const arxivUrl = 'https://export.arxiv.org/api/query?search_query=cat:cs.AI+OR+cat:physics.gen-ph+OR+cat:q-bio&start=0&max_results=8&sortBy=submittedDate&sortOrder=descending';
+            const response = await axios.get(arxivUrl, { timeout: 10000 });
+            const xml = response.data || '';
+            const entries = xml.match(/<entry>[\s\S]*?<\/entry>/g) || [];
+
+            const journals: any[] = [];
+            entries.forEach((entryXml: string) => {
+                const titleMatch = entryXml.match(/<title>([\s\S]*?)<\/title>/);
+                const summaryMatch = entryXml.match(/<summary>([\s\S]*?)<\/summary>/);
+                const idMatch = entryXml.match(/<id>([\s\S]*?)<\/id>/);
+                const publishedMatch = entryXml.match(/<published>([\s\S]*?)<\/published>/);
+
+                if (titleMatch && idMatch) {
+                    const title = titleMatch[1].replace(/\n/g, ' ').trim();
+                    const summary = summaryMatch ? summaryMatch[1].replace(/\n/g, ' ').trim() : 'ArXiv research paper.';
+                    const url = idMatch[1].trim();
+                    const pubDate = publishedMatch ? new Date(publishedMatch[1].trim()).toISOString() : new Date().toISOString();
+
+                    journals.push({
+                        title: `[Journal] ${title}`,
+                        description: summary.length > 250 ? summary.substring(0, 247) + '...' : summary,
+                        url,
+                        source: 'ArXiv Research',
+                        timestamp: pubDate
+                    });
+                }
+            });
+
+            if (journals.length > 0) {
+                await this.updateBuffer('journals', journals, 7);
+            }
         } catch (e: any) {
             logger.warn(`⚠️ [Intel] refreshJournals failed: ${e.message}`);
         }
     }
 
-    // Best-effort: prefer a real, readable copy on archive.org (where OpenLibrary
-    // has linked one via an edition's `ocaid`) over the generic OpenLibrary
-    // catalog/metadata page — not every trending work has a digitized full-text
-    // copy, so this silently falls back to the catalog link when none exists.
     private static async getReadableBookUrl(workKey: string): Promise<string> {
         const catalogUrl = `https://openlibrary.org${workKey}`;
         try {
@@ -405,7 +514,6 @@ export class IntelligenceService {
             const readable = editions.find((e: any) => e.ocaid);
             return readable ? `https://archive.org/details/${readable.ocaid}` : catalogUrl;
         } catch (e: any) {
-            logger.info(`ℹ️ [Intel] No readable-copy lookup for ${workKey}, falling back to catalog link: ${e.message}`);
             return catalogUrl;
         }
     }
@@ -418,22 +526,24 @@ export class IntelligenceService {
             });
 
             const lastUpdated = new Date(buffer.lastUpdated).getTime();
-            const twoWeeksMs = 14 * 24 * 60 * 60 * 1000;
+            const oneDayMs = 24 * 60 * 60 * 1000;
 
-            if (Date.now() - lastUpdated < twoWeeksMs && (buffer.items || []).length >= 1) return;
+            if (Date.now() - lastUpdated < oneDayMs && (buffer.items || []).length >= 3) return;
 
-            const response = await axios.get('https://openlibrary.org/trending/daily.json');
-            const novels = await Promise.all(response.data.works.slice(0, 3).map(async (w: any) => ({
+            const response = await axios.get('https://openlibrary.org/trending/daily.json', { timeout: 10000 });
+            const works = response.data?.works || [];
+            const novels = await Promise.all(works.slice(0, 8).map(async (w: any) => ({
                 title: `[Novel] ${w.title}`,
-                description: `Author: ${w.author_name?.join(', ') || 'Unknown'}. A trending piece in literature.`,
+                description: `Author: ${w.author_name?.join(', ') || 'Unknown'}. Trending piece in literature.`,
                 url: await this.getReadableBookUrl(w.key),
-                // Medium-size cover — OpenLibrary's covers.openlibrary.org serves
-                // -S/-M/-L sizes off this same id; null when a work has no cover_i.
                 imageUrl: w.cover_i ? `https://covers.openlibrary.org/b/id/${w.cover_i}-M.jpg` : null,
                 source: 'OpenLibrary',
                 timestamp: new Date().toISOString()
             })));
-            await this.updateBuffer('novels', novels, 16); // wider than its own 2-week refresh cycle
+
+            if (novels.length > 0) {
+                await this.updateBuffer('novels', novels, 7);
+            }
         } catch (e: any) {
             logger.warn(`⚠️ [Intel] refreshLiterature failed: ${e.message}`);
         }

@@ -127,6 +127,31 @@ router.get('/contacts', async (req: Request, res: Response) => {
     }
 });
 
+// ============== Disaster Proximity Check-In ==============
+
+router.post('/disaster-checkin', async (req: Request, res: Response) => {
+    try {
+        const { deviceId, status, latitude, longitude, hazardName } = req.body;
+        if (!deviceId) return res.status(200).json({ success: false, error: 'deviceId required' });
+
+        const user = await User.findOne({ where: { deviceId } });
+        if (!user) return res.status(200).json({ success: false, error: 'User not found' });
+
+        if (latitude !== undefined && longitude !== undefined) {
+            user.lastKnownLat = Number(latitude);
+            user.lastKnownLon = Number(longitude);
+            user.lastLocationUpdate = new Date();
+            await user.save();
+        }
+
+        logger.info(`🛡️ [Disaster Check-In] Device ${deviceId} checked in as '${status}' for hazard: ${hazardName || 'General Hazard'}`);
+        res.json({ success: true, status, checkedInAt: new Date().toISOString() });
+    } catch (e: any) {
+        logger.error(`❌ POST /emergency/disaster-checkin error: ${e.message}`);
+        res.status(200).json({ success: false, error: e.message });
+    }
+});
+
 router.post('/contacts', async (req: Request, res: Response) => {
     try {
         const { deviceId, firebaseUid, name, channel, platform, platformContactId, email, phoneNumber } = req.body;

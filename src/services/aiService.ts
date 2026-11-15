@@ -324,23 +324,42 @@ export const getAvailableModels = async (isPro: boolean, freeUserCount: number =
         }
     }
 
-    // 🎨 Generation models (Imagen/Veo) — kept Pro-only for now since generation
-    // is materially more expensive per-request than text; revisit once there's
-    // real usage data to size a free-tier quota against.
-    if (process.env.GEMINI_API_KEY) {
-        models = [
-            ...models,
-            {
-                id: IMAGE_GEN_MODEL_ID,
-                name: 'Imagen 3 (Image Generation)',
-                provider: 'google',
-                isProOnly: true,
-                price: 'PRO',
-                quota: 'Premium Unlocked',
-                health: 100,
-                features: 1,
-                capabilities: { text: false, imageGen: true, videoGen: false, voice: false }
-            },
+    // 🎨 Free & Pro Generation models (Pollinations, Hugging Face, Imagen, Veo)
+    models = [
+        ...models,
+        {
+            id: 'pollinations',
+            name: 'Pollinations AI (FLUX.1 Free Generator)',
+            provider: 'pollinations',
+            isProOnly: false,
+            price: 'Free',
+            quota: 'Unlimited Free',
+            health: 100,
+            features: 1,
+            capabilities: { text: false, imageGen: true, videoGen: false, voice: false }
+        },
+        {
+            id: 'huggingface',
+            name: 'Hugging Face (FLUX.1-schnell Free)',
+            provider: 'huggingface',
+            isProOnly: false,
+            price: 'Free',
+            quota: 'Free Inference API',
+            health: 100,
+            features: 1,
+            capabilities: { text: false, imageGen: true, videoGen: false, voice: false }
+        },
+        {
+            id: IMAGE_GEN_MODEL_ID,
+            name: 'Imagen 3 (Image Generation)',
+            provider: 'google',
+            isProOnly: true,
+            price: 'PRO',
+            quota: 'Premium Unlocked',
+            health: 100,
+            features: 1,
+            capabilities: { text: false, imageGen: true, videoGen: false, voice: false }
+        },
             {
                 id: VIDEO_GEN_MODEL_ID,
                 name: 'Veo 2 (Video Generation)',
@@ -389,6 +408,69 @@ export const getAvailableModels = async (isPro: boolean, freeUserCount: number =
     // OpenRouter premium model from free users entirely, instead of showing them
     // locked, which is what the drawer's Free/Premium sub-tabs actually expect.
     return models;
+};
+
+/**
+ * 🖼️ Free Image Generation via Pollinations.ai (Keyless, 100% Free, FLUX.1 Engine)
+ */
+export const generatePollinationsImage = async (prompt: string): Promise<AiResponse> => {
+    try {
+        const encodedPrompt = encodeURIComponent(prompt);
+        const seed = Math.floor(Math.random() * 1000000);
+        const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&model=flux&seed=${seed}&nologo=true`;
+
+        const response = await axios.get(imageUrl, {
+            responseType: 'arraybuffer',
+            timeout: 25000
+        });
+
+        const base64 = Buffer.from(response.data).toString('base64');
+        return {
+            content: 'Image generated via Pollinations FLUX.1 Engine',
+            provider: 'pollinations',
+            success: true,
+            generatedImageBase64: base64,
+            generatedImageMimeType: 'image/jpeg'
+        };
+    } catch (e: any) {
+        logger.error('❌ Pollinations Image Generation Error:', e.message);
+        return {
+            content: '',
+            provider: 'pollinations',
+            success: false,
+            error: `Pollinations generation failed: ${e.message}`
+        };
+    }
+};
+
+/**
+ * 🖼️ Free Image Generation via Hugging Face Inference API (FLUX.1-schnell / SDXL)
+ */
+export const generateHuggingFaceImage = async (prompt: string, token?: string): Promise<AiResponse> => {
+    try {
+        const hfToken = token || process.env.HUGGINGFACE_API_KEY;
+        const hfUrl = 'https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell';
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (hfToken) headers['Authorization'] = `Bearer ${hfToken}`;
+
+        const response = await axios.post(
+            hfUrl,
+            { inputs: prompt },
+            { headers, responseType: 'arraybuffer', timeout: 30000 }
+        );
+
+        const base64 = Buffer.from(response.data).toString('base64');
+        return {
+            content: 'Image generated via Hugging Face FLUX.1 Engine',
+            provider: 'huggingface',
+            success: true,
+            generatedImageBase64: base64,
+            generatedImageMimeType: 'image/jpeg'
+        };
+    } catch (e: any) {
+        logger.warn(`⚠️ HuggingFace generation warning (${e.message}) — pivoting to Pollinations fallback...`);
+        return generatePollinationsImage(prompt);
+    }
 };
 
 /**
@@ -566,11 +648,21 @@ export const getAiResponse = async (
         const videoUrl = result.videoUrl || buildMediaUrl(storeMediaBase64(result.videoBase64!, 'video/mp4'));
         return { content: '', provider: `byok-video:${user.byokVideoProviderType}`, success: true, generatedVideoUrl: videoUrl };
     }
+    if (provider === 'pollinations') {
+        return generatePollinationsImage(prompt);
+    }
+    if (provider === 'huggingface') {
+        return generateHuggingFaceImage(prompt);
+    }
     if (provider === IMAGE_GEN_MODEL_ID) {
-        // If the user has a saved+active image-gen provider, use theirs instead
-        // of "Our Recommended" (Imagen) — same capability-routing idea as
-        // video-edit BYOK, but with a user-picked choice from a saved list
-        // rather than a single on/off slot.
+        // If free user (no ai_pro add-on), route to free Pollinations/HuggingFace engine
+        const hasAiPro = user?.deviceId ? await hasAddon(user.deviceId, 'ai_pro') : false;
+        if (!hasAiPro && !user?.activeImageGenConfigId) {
+            logger.info('🎨 Free user image generation -> routing to Pollinations FLUX.1 free engine');
+            return generatePollinationsImage(prompt);
+        }
+
+        // If the user has a saved+active image-gen provider, use theirs
         if (user?.activeImageGenConfigId) {
             const config = await AiProviderConfig.findOne({ where: { id: user.activeImageGenConfigId, deviceId: user.deviceId } });
             if (config) {
@@ -580,13 +672,10 @@ export const getAiResponse = async (
                 if (result.imageBase64) {
                     return { content: '', provider: `custom-image:${config.label}`, success: true, generatedImageBase64: result.imageBase64, generatedImageMimeType: 'image/png' };
                 }
-                // Provider gave a URL instead of base64 — pass it through directly
-                // (same as video generation's generatedVideoUrl) rather than an
-                // unnecessary re-fetch-and-re-encode round trip server-side.
                 return { content: '', provider: `custom-image:${config.label}`, success: true, generatedImageUrl: result.imageUrl };
             }
         }
-        if (!geminiKeyForGeneration) return { content: '', provider, success: false, error: 'Image generation is not configured.' };
+        if (!geminiKeyForGeneration) return generatePollinationsImage(prompt);
         return generateImage(prompt, geminiKeyForGeneration);
     }
     if (provider === VIDEO_GEN_MODEL_ID) {
