@@ -9,7 +9,12 @@ import { MarketAlert } from '../models/MarketAlert';
 const COINGECKO_ID_MAP: Record<string, string> = {
     BTC: 'bitcoin', ETH: 'ethereum', SOL: 'solana', DOGE: 'dogecoin',
     XRP: 'ripple', ADA: 'cardano', BNB: 'binancecoin', LTC: 'litecoin',
-    MATIC: 'polygon', DOT: 'polkadot', AVAX: 'avalanche-2', LINK: 'chainlink'
+    MATIC: 'polygon', DOT: 'polkadot', AVAX: 'avalanche-2', LINK: 'chainlink',
+    ATOM: 'cosmos', SHIB: 'shiba-inu', UNI: 'uniswap', NEAR: 'near',
+    SUI: 'sui', APT: 'aptos', FET: 'artificial-superintelligence-alliance', RENDER: 'render-token',
+    PEPE: 'pepe', ARB: 'arbitrum', OP: 'optimism', FIL: 'filecoin',
+    ICP: 'internet-computer', TIA: 'celestia', INJ: 'injective-protocol', STX: 'blockstack',
+    KAS: 'kaspa', RUNE: 'thorchain', XLM: 'stellar', ALGO: 'algorand'
 };
 
 export interface Quote {
