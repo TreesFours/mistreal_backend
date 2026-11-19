@@ -23,14 +23,16 @@ export class IntelligenceService {
             const user = await User.findOne({ where: { firebaseUid } });
             const deviceId = user?.deviceId;
 
-            // 2. Fetch All Intelligence Buffers
-            const [newsBuffer, novelBuffer, wikiBuffer, journalBuffer, astroBuffer, sportsBuffer] = await Promise.all([
+            // 2. Fetch All Intelligence Buffers (including disasters & markets)
+            const [newsBuffer, novelBuffer, wikiBuffer, journalBuffer, astroBuffer, sportsBuffer, disasterBuffer, marketBuffer] = await Promise.all([
                 IntelligenceBuffer.findOne({ where: { category: 'news' } }),
                 IntelligenceBuffer.findOne({ where: { category: 'novels' } }),
                 IntelligenceBuffer.findOne({ where: { category: 'wiki' } }),
                 IntelligenceBuffer.findOne({ where: { category: 'journals' } }),
                 IntelligenceBuffer.findOne({ where: { category: 'astro' } }),
-                IntelligenceBuffer.findOne({ where: { category: 'sports' } })
+                IntelligenceBuffer.findOne({ where: { category: 'sports' } }),
+                IntelligenceBuffer.findOne({ where: { category: 'disasters' } }),
+                IntelligenceBuffer.findOne({ where: { category: 'markets' } })
             ]);
 
             // 3. Fetch Social Events (only if deviceId is known)
@@ -64,6 +66,8 @@ export class IntelligenceService {
             const astro = (astroBuffer?.items || []).filter((i: any) => !pinnedTitles.includes(i.title)).slice(0, limit);
             const socials = socialItems.filter((i: any) => !pinnedTitles.includes(i.title)).slice(0, limit);
             const sports = (sportsBuffer?.items || []).filter((i: any) => !pinnedTitles.includes(i.title)).slice(0, 15);
+            const disasters = (disasterBuffer?.items || []).filter((i: any) => !pinnedTitles.includes(i.title)).map((d: any) => ({ ...d, type: 'sos_alert' }));
+            const markets = (marketBuffer?.items || []).filter((i: any) => !pinnedTitles.includes(i.title)).map((m: any) => ({ ...m, type: 'news' }));
 
             // 6. Interleave Logic (The Rhythm)
             const interleaved: any[] = [];
@@ -76,10 +80,12 @@ export class IntelligenceService {
                 ...sports.map((s: any) => ({ ...s, type: 'sports' }))
             ];
 
-            const maxLength = Math.max(news.length, astro.length, socials.length);
+            const maxLength = Math.max(news.length, astro.length, socials.length, disasters.length, markets.length);
 
             for (let i = 0; i < maxLength; i++) {
+                if (disasters[i]) interleaved.push(disasters[i]);
                 if (news[i]) interleaved.push({ ...news[i], type: 'news' });
+                if (markets[i]) interleaved.push(markets[i]);
                 if (astro[i]) interleaved.push({ ...astro[i], type: 'astro' });
                 if (socials[i]) interleaved.push(socials[i]);
             }
@@ -102,12 +108,7 @@ export class IntelligenceService {
 
     /**
      * Updates a specific intelligence category buffer.
-     * Capped at 15 items, newest first, AND age-pruned — previously only the
-     * count cap bounded this (an item could sit for weeks if 15 never filled
-     * up). maxAgeDays defaults to 1 for fast-moving categories (news/astro/
-     * journals); slow-refreshing categories (wiki ~4-day cycle, novels
-     * ~2-week cycle) pass a wider window so items aren't pruned before their
-     * own next refresh ever arrives.
+     * Capped at 15 items, newest first, AND age-pruned.
      */
     private static async updateBuffer(category: string, newItems: any[], maxAgeDays: number = 1) {
         try {
@@ -128,7 +129,11 @@ export class IntelligenceService {
                 !freshItems.some((existing: any) => existing.title === newItem.title)
             );
 
-            if (uniqueNewItems.length === 0 && freshItems.length === currentItems.length) return;
+            if (uniqueNewItems.length === 0 && freshItems.length === currentItems.length) {
+                buffer.lastUpdated = new Date();
+                await buffer.save();
+                return;
+            }
 
             // Prepend new items and truncate to 15
             const updatedItems = [...uniqueNewItems, ...freshItems].slice(0, 15);
@@ -520,26 +525,27 @@ export class IntelligenceService {
 
     private static async refreshLiterature() {
         try {
-            const [buffer] = await IntelligenceBuffer.findOrCreate({
-                where: { category: 'novels' },
-                defaults: { category: 'novels', items: [] }
+            // Dynamic Subject Rotation (scifi, fantasy, mystery, history, tech, etc.) with random offset
+            const subjects = ['science_fiction', 'fantasy', 'mystery', 'history', 'technology', 'thriller', 'biography', 'adventure', 'classics', 'philosophy'];
+            const randomSubject = subjects[Math.floor(Math.random() * subjects.length)];
+            const randomOffset = Math.floor(Math.random() * 15);
+
+            const response = await axios.get(`https://openlibrary.org/subjects/${randomSubject}.json`, {
+                params: { limit: 8, offset: randomOffset },
+                timeout: 10000
             });
-
-            const lastUpdated = new Date(buffer.lastUpdated).getTime();
-            const oneDayMs = 24 * 60 * 60 * 1000;
-
-            if (Date.now() - lastUpdated < oneDayMs && (buffer.items || []).length >= 3) return;
-
-            const response = await axios.get('https://openlibrary.org/trending/daily.json', { timeout: 10000 });
             const works = response.data?.works || [];
-            const novels = await Promise.all(works.slice(0, 8).map(async (w: any) => ({
-                title: `[Novel] ${w.title}`,
-                description: `Author: ${w.author_name?.join(', ') || 'Unknown'}. Trending piece in literature.`,
-                url: await this.getReadableBookUrl(w.key),
-                imageUrl: w.cover_i ? `https://covers.openlibrary.org/b/id/${w.cover_i}-M.jpg` : null,
-                source: 'OpenLibrary',
-                timestamp: new Date().toISOString()
-            })));
+            const novels = await Promise.all(works.slice(0, 8).map(async (w: any) => {
+                const authors = (w.authors || []).map((a: any) => a.name).join(', ') || 'Unknown Author';
+                return {
+                    title: `[Novel] ${w.title}`,
+                    description: `Author: ${authors}. Subject: ${randomSubject.replace('_', ' ')}.`,
+                    url: await this.getReadableBookUrl(w.key),
+                    imageUrl: w.cover_id ? `https://covers.openlibrary.org/b/id/${w.cover_id}-M.jpg` : null,
+                    source: 'OpenLibrary',
+                    timestamp: new Date().toISOString()
+                };
+            }));
 
             if (novels.length > 0) {
                 await this.updateBuffer('novels', novels, 7);

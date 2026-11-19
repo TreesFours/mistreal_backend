@@ -364,7 +364,15 @@ app.get('/api/weather', async (req, res) => {
 });
 
 app.get('/api/news', async (req, res) => {
-    const { firebaseUid, fastLoad } = req.query;
+    const { firebaseUid, fastLoad, refresh } = req.query;
+
+    if (refresh === 'true') {
+        try {
+            await IntelligenceService.refreshGlobalIntel();
+        } catch (e: any) {
+            logger.warn(`⚠️ Live Intel Refresh Error: ${e.message}`);
+        }
+    }
 
     if (firebaseUid) {
         // 🕒 NEW: Professional Interleaved Feed

@@ -452,7 +452,7 @@ const isPublishAction = (type: string): boolean => {
 
 export const sendSocialAction = async (
     user: User,
-    action: { platform: string, type: string, content: string, targetId?: string, mediaUrl?: string, shareToCommunity?: boolean, mistrealOnly?: boolean }
+    action: { platform: string, type: string, content: string, targetId?: string, mediaUrl?: string, mediaUrls?: string[], shareToCommunity?: boolean, mistrealOnly?: boolean }
 ) => {
     // Never touches Zernio/an external account at all — no connected
     // platform required. Tagged with the pseudo-platform 'mistreal' (not a
@@ -488,7 +488,7 @@ export const sendSocialAction = async (
         ? `${action.content}\n\n📍 via Mistreal → ${getPlatformDefinition(action.platform)?.displayName || action.platform}`
         : action.content;
 
-    const result = await ZernioAdapter.sendAction(user.zernioProfileId, action.platform, outgoingContent, action.type, action.targetId, action.mediaUrl);
+    const result = await ZernioAdapter.sendAction(user.zernioProfileId, action.platform, outgoingContent, action.type, action.targetId, action.mediaUrl, action.mediaUrls);
 
     // Opt-in, per-post, never retroactive — the author explicitly chose this
     // at send time. A failure here must never surface as a failed post send.

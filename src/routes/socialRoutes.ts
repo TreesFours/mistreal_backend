@@ -342,17 +342,24 @@ router.post('/action', authenticateUser, validate(socialActionSchema), async (re
     try {
         const user = await getResolvedUser(req);
         if (!user) return res.status(404).json({ error: 'User not found' });
-        const { platform, type, content, targetId, mediaBase64, mediaMimeType, shareToCommunity, mistrealOnly } = req.body;
+        const { platform, type, content, targetId, mediaBase64, mediaMimeType, mediaItems, shareToCommunity, mistrealOnly } = req.body;
 
-        // AI-generated/edited images only exist as base64 — host it briefly on our
-        // own backend so Zernio has a real URL to fetch (see mediaStore.ts).
         let mediaUrl: string | undefined;
-        if (mediaBase64) {
+        let mediaUrls: string[] | undefined;
+
+        if (Array.isArray(mediaItems) && mediaItems.length > 0) {
+            mediaUrls = mediaItems.map((item: any) => {
+                const id = storeMediaBase64(item.mediaBase64, item.mediaMimeType || 'image/jpeg');
+                return buildMediaUrl(id);
+            });
+            mediaUrl = mediaUrls[0];
+        } else if (mediaBase64) {
             const id = storeMediaBase64(mediaBase64, mediaMimeType || 'image/jpeg');
             mediaUrl = buildMediaUrl(id);
+            mediaUrls = [mediaUrl];
         }
 
-        const result = await sendSocialAction(user, { platform, type, content, targetId, mediaUrl, shareToCommunity, mistrealOnly });
+        const result = await sendSocialAction(user, { platform, type, content, targetId, mediaUrl, mediaUrls, shareToCommunity, mistrealOnly });
         res.json(result);
     } catch (error: any) { res.status(500).json({ error: error.message }); }
 });

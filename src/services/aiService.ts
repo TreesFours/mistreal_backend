@@ -206,8 +206,8 @@ export const getRankedGeminiModels = async (isPro: boolean = false): Promise<str
 
     // 🛡️ HARD-CODED STABLE FALLBACKS (If discovery fails)
     const defaults = isPro
-        ? ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-1.0-pro"]
-        : ["gemini-1.5-flash", "gemini-1.5-flash-8b", "gemini-1.0-pro"];
+        ? ["gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-pro"]
+        : ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
 
     if (liveModels.length === 0) {
         return defaults;
@@ -877,7 +877,7 @@ export const getAiResponse = async (
         const rankedCandidates = await getRankedGeminiModels(hasAiPro);
 
         if (!targetModel || targetModel === 'dynamic') {
-            targetModel = rankedCandidates[0] || "gemini-1.5-flash";
+            targetModel = rankedCandidates[0] || "gemini-2.5-flash";
         }
 
         const modelsToTry: string[] = [targetModel];
@@ -898,7 +898,7 @@ export const getAiResponse = async (
         // 🚨 ULTIMATE EMERGENCY PIVOT: If all Google candidates fail, try OpenRouter as a bridge.
         if (openRouterKey) {
             logger.error(`🚨 Global Google failure. Pivoting to OpenRouter bridge...`);
-            return await getAiResponse(prompt, 'google/gemini-flash-1.5', history, user, imageDatas, audioData);
+            return await getAiResponse(prompt, 'google/gemini-2.0-flash-001', history, user, imageDatas, audioData);
         }
 
         return {
@@ -913,7 +913,7 @@ export const getAiResponse = async (
     if (!openRouterKey) return { content: '', provider: activeProvider, success: false, error: "AI Key missing." };
 
     const orModels = [
-        activeProvider === 'dynamic' || activeProvider.includes('gemini-flash-1.5') ? 'google/gemini-flash-1.5' : activeProvider,
+        activeProvider === 'dynamic' || activeProvider.includes('gemini-flash') ? 'google/gemini-2.0-flash-001' : activeProvider,
         'meta-llama/llama-3.3-70b-instruct:free',
         'meta-llama/llama-3.1-8b-instruct:free',
         'deepseek/deepseek-r1:free',

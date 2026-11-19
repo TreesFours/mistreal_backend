@@ -51,6 +51,10 @@ export const socialActionSchema = z.object({
         targetId: z.string().optional(),
         mediaBase64: z.string().optional(),
         mediaMimeType: z.string().optional(),
+        mediaItems: z.array(z.object({
+            mediaBase64: z.string(),
+            mediaMimeType: z.string().optional()
+        })).optional(),
         shareToCommunity: z.boolean().optional(),
         mistrealOnly: z.boolean().optional(),
     })

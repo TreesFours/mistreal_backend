@@ -217,7 +217,7 @@ export const ZernioAdapter = {
    * (e.g. they've DMed the connected account before). This degrades to a
    * clear error rather than a fake success.
    */
-  sendAction: async (profileId: string, platform: string, content: string, type: string, targetId?: string, mediaUrl?: string) => {
+  sendAction: async (profileId: string, platform: string, content: string, type: string, targetId?: string, mediaUrl?: string, mediaUrls?: string[]) => {
     try {
       if (!profileId) throw new Error('Security Error: profileId is required for multi-tenant isolation.');
 
@@ -259,10 +259,19 @@ export const ZernioAdapter = {
         // targetId here is the Zernio CONVERSATION id (see fetchInbox — it's
         // deliberately surfaced as the "author id" for exactly this purpose).
         if (!targetId) throw new Error('A conversationId is required to send a DM.');
+        const effectiveMediaUrls = (mediaUrls && mediaUrls.length > 0) ? mediaUrls : (mediaUrl ? [mediaUrl] : undefined);
         const response = await axios.post(`${ZERNIO_API_URL}/inbox/conversations/${targetId}/messages`, {
           text: content,
-          mediaUrls: mediaUrl ? [mediaUrl] : undefined
+          mediaUrls: effectiveMediaUrls
         }, { headers: { 'Authorization': `Bearer ${getApiKey()}` } });
+        return response.data;
+      }
+
+      if (lowerType === 'delete message' || lowerType === 'delete_message' || lowerType === 'delete') {
+        if (!targetId) throw new Error('A messageId is required to delete a message.');
+        const response = await axios.delete(`${ZERNIO_API_URL}/inbox/messages/${targetId}`, {
+          headers: { 'Authorization': `Bearer ${getApiKey()}` }
+        });
         return response.data;
       }
 
