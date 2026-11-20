@@ -102,4 +102,27 @@ router.get('/settings', authenticateUser, async (req: Request, res: Response) =>
     }
 });
 
+router.post('/promo-code', async (req: Request, res: Response) => {
+    try {
+        const { deviceId, promoCode } = req.body;
+        if (!deviceId || !promoCode) {
+            return res.status(400).json({ success: false, error: 'deviceId and promoCode are required' });
+        }
+        const masterCode = process.env.MASTER_PROMO_CODE || 'MISTREAL2026';
+        if (promoCode.trim().toUpperCase() === masterCode.toUpperCase()) {
+            const user = await User.findOne({ where: { deviceId } });
+            if (user) {
+                user.isPro = true;
+                await user.save();
+            }
+            res.json({ success: true, isPro: true, message: 'Master Promo Code activated! PRO features unlocked.' });
+        } else {
+            res.json({ success: false, isPro: false, error: 'Invalid or expired promo code.' });
+        }
+    } catch (e: any) {
+        logger.error(`❌ POST /users/promo-code error: ${e.message}`);
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
 export default router;

@@ -892,6 +892,22 @@ export const getAiResponse = async (
         });
 
         if (result.success) {
+            // Check for [INLINE_MEDIA: ...] tag in the response
+            const inlineMediaMatch = result.content.match(/\[INLINE_MEDIA:\s*(?:style=([^,\s\]]+),\s*)?prompt=([^\]]+)\]/i);
+            if (inlineMediaMatch) {
+                const mediaPrompt = inlineMediaMatch[2].trim();
+                const imageRes = await generatePollinationsImage(mediaPrompt);
+                if (imageRes.success) {
+                    return {
+                        content: result.content,
+                        provider: result.modelUsed,
+                        success: true,
+                        generatedImageBase64: imageRes.generatedImageBase64,
+                        generatedImageMimeType: imageRes.generatedImageMimeType,
+                        groundingCitations: result.groundingCitations
+                    };
+                }
+            }
             return { content: result.content, provider: result.modelUsed, success: true, groundingCitations: result.groundingCitations };
         }
 
