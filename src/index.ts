@@ -179,6 +179,8 @@ app.use(express.json({
 }));
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
+import liveCamRoutes from './routes/liveCamRoutes';
+
 // 🔗 Core Routes
 app.use('/api/social', socialRoutes);
 app.use('/api/webhook', webhookRoutes);
@@ -195,6 +197,7 @@ app.use('/api/needs', needRoutes);
 app.use('/api/ads', adRoutes);
 app.use('/api/markets', marketRoutes);
 app.use('/api/games', gameRoutes);
+app.use('/api', liveCamRoutes);
 app.use('/games-static', express.static(path.join(__dirname, '../public/games')));
 
 app.get('/', (req, res) => res.send('🚀 Mistreal Backend Running'));
@@ -374,15 +377,11 @@ app.get('/api/news', async (req, res) => {
         }
     }
 
-    if (firebaseUid) {
-        // 🕒 NEW: Professional Interleaved Feed
-        const feed = await IntelligenceService.getInterleavedFeed(String(firebaseUid), fastLoad === 'true');
-        return res.json({ articles: feed });
-    }
+    const deviceId = (req.query.deviceId || req.body?.deviceId) as string | undefined;
+    const firebaseUid = (req.query.firebaseUid || req.body?.firebaseUid) as string | undefined;
 
-    // Fallback to legacy feed
-    const news = await IntelligenceService.getGlobalFeed();
-    res.json({ articles: news });
+    const feed = await IntelligenceService.getInterleavedFeed(firebaseUid, deviceId, fastLoad === 'true');
+    return res.json({ articles: feed });
 });
 
 // 📌 Intelligence Pinning

@@ -6,6 +6,7 @@ import { PinnedIntel } from '../models/PinnedIntel';
 import { getWeatherData } from './weatherService';
 import { getDetailedAstroData, getNasaApod, getSpaceNews } from './astroService';
 import { getLiveDisasters } from './disasterService';
+import { getOrCreateUserInternal } from '../utils/userResolver';
 
 /**
  * 🛰️ STRATEGIC INTELLIGENCE SERVICE
@@ -17,11 +18,15 @@ export class IntelligenceService {
      * Returns the consolidated feed for the app with a specific "Rhythm".
      * 🕒 1 News -> 1 Novel -> 1 Astro -> 1 Social
      */
-    static async getInterleavedFeed(firebaseUid: string, fastLoad: boolean = false) {
+    static async getInterleavedFeed(firebaseUid?: string, deviceId?: string, fastLoad: boolean = false) {
         try {
-            // 1. Fetch User & Device Context
-            const user = await User.findOne({ where: { firebaseUid } });
-            const deviceId = user?.deviceId;
+            // 1. Fetch User & Device Context (Device-first resolution)
+            let user: any = null;
+            if (deviceId || firebaseUid) {
+                user = await getOrCreateUserInternal(deviceId || '', firebaseUid);
+            }
+            const resolvedDeviceId = user?.deviceId || deviceId;
+            const resolvedUid = user?.firebaseUid || firebaseUid;
 
             // 2. Fetch All Intelligence Buffers (including disasters & markets)
             const [newsBuffer, novelBuffer, wikiBuffer, journalBuffer, astroBuffer, sportsBuffer, disasterBuffer, marketBuffer] = await Promise.all([
