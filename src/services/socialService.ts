@@ -1,4 +1,4 @@
-import { User, SocialEvent } from '../models/userModel';
+import { User, SocialEvent, Post } from '../models/userModel';
 import { CommunityPost } from '../models/communityModel';
 import { Op } from 'sequelize';
 import { getPlatformDefinition, getAvailablePlatformDefinitions } from './socialPlatforms/platformRegistry';
@@ -510,6 +510,128 @@ export const sendSocialAction = async (
     }
 
     return result;
+};
+
+/**
+ * Publishes one post across multiple platforms at once and keeps exactly
+ * ONE Mistreal-side record for it (see Post model's doc) — this is what
+ * lets the feed show the post once instead of once per platform, and lets
+ * comments from every platform it reached aggregate under it later via
+ * getAggregatedComments.
+ */
+export const createMultiPlatformPost = async (
+    user: User,
+    params: { content: string; platforms: string[]; mediaUrl?: string; mediaUrls?: string[] }
+) => {
+    if (!user.zernioProfileId) throw new Error('Connect your social profile first.');
+    if (!params.platforms || params.platforms.length === 0) throw new Error('At least one platform is required.');
+
+    const outgoingContent = `${params.content}\n\n📍 via Mistreal`;
+
+    try {
+        const zernioResult: any = await ZernioAdapter.publishMultiPlatformPost(
+            user.zernioProfileId, outgoingContent, params.platforms, params.mediaUrl, params.mediaUrls
+        );
+        const zernioPostId: string | null = zernioResult?.id || zernioResult?.post?.id || zernioResult?._id || null;
+        const unlinkedPlatforms: string[] = zernioResult?.unlinkedPlatforms || [];
+        const reachedPlatforms = params.platforms.filter(p => !unlinkedPlatforms.includes(p));
+
+        const post = await Post.create({
+            deviceId: user.deviceId,
+            content: params.content,
+            mediaUrl: params.mediaUrl || null,
+            platforms: reachedPlatforms,
+            zernioPostId,
+            status: zernioPostId ? 'success' : 'failed'
+        });
+
+        return { success: true, post, unlinkedPlatforms };
+    } catch (e: any) {
+        const post = await Post.create({
+            deviceId: user.deviceId,
+            content: params.content,
+            mediaUrl: params.mediaUrl || null,
+            platforms: params.platforms,
+            zernioPostId: null,
+            status: 'failed',
+            error: e.message
+        });
+        return { success: false, post, error: e.message };
+    }
+};
+
+/**
+ * Merges comments from every platform a post went to into one list, tagged
+ * by source platform. Relies on this app's webhook handler storing each
+ * incoming comment's `metadata.post_id` as Zernio's own unified post id
+ * (consistent with Zernio's documented "one id represents the entire
+ * multi-platform operation" model) — UNCONFIRMED against a real live
+ * webhook payload, since this hasn't been observed with real traffic yet.
+ * If a given platform's webhook actually relays its own native post id
+ * instead, that platform's comments just won't aggregate here — degrades
+ * quietly rather than breaking anything.
+ */
+export const getAggregatedComments = async (user: User, postId: string) => {
+    const post = await Post.findOne({ where: { id: postId, deviceId: user.deviceId } });
+    if (!post) throw new Error('Post not found.');
+    if (!post.zernioPostId) return [];
+
+    const comments = await SocialEvent.findAll({
+        where: {
+            deviceId: user.deviceId,
+            type: 'comment',
+            metadata: { post_id: post.zernioPostId }
+        } as any,
+        order: [['timestamp', 'ASC']]
+    });
+
+    return comments.map(c => ({
+        id: c.id,
+        platform: c.platform,
+        senderName: c.senderName,
+        content: c.content,
+        timestamp: c.timestamp
+    }));
+};
+
+/**
+ * Posts a new comment through Mistreal and relays it out to the real
+ * platform via Zernio's existing comment endpoint (confirmed working —
+ * POST /posts/{id}/comment is a genuine outbound relay, not a local-only
+ * write) using the post's shared unified id, then stores a local copy so
+ * it shows immediately without waiting for a webhook echo. `platform`
+ * picks which of the post's linked accounts resolves the accountId Zernio's
+ * comment endpoint still requires — defaults to the first one since the
+ * comment itself attaches to the single shared post id regardless.
+ */
+export const addCommentToPost = async (user: User, postId: string, content: string) => {
+    const post = await Post.findOne({ where: { id: postId, deviceId: user.deviceId } });
+    if (!post) throw new Error('Post not found.');
+    const zernioPostId = post.zernioPostId;
+    if (!zernioPostId) throw new Error('This post has no linked platform post to comment on.');
+    const platforms = post.platforms;
+
+    const result = await sendSocialAction(user, {
+        platform: platforms[0],
+        type: 'comment',
+        content,
+        targetId: zernioPostId
+    });
+
+    await SocialEvent.create({
+        deviceId: user.deviceId,
+        platform: platforms[0],
+        type: 'comment',
+        externalId: result?.id || `mistreal_${Date.now()}`,
+        senderId: user.deviceId,
+        senderName: user.userName || 'You',
+        content,
+        metadata: { post_id: zernioPostId, viaMistreal: true },
+        timestamp: new Date(),
+        isRead: true
+    });
+
+    return { success: true };
 };
 
 /**

@@ -306,6 +306,64 @@ export const ZernioAdapter = {
   },
 
   /**
+   * Publishes ONE post across multiple platforms at once — confirmed
+   * against zernio.com's real OpenAPI spec that `platforms` already accepts
+   * more than one {platform, accountId} entry in a single call ("this
+   * single call publishes or schedules the post to every account in
+   * platforms, across any platform"), and that the response carries one
+   * unified top-level post id usable later for GET/comment regardless of
+   * how many platforms it went to. `sendAction`'s default branch above
+   * never exercised that — it always built a one-entry array. This is the
+   * piece that lets Mistreal keep ONE post record instead of one per
+   * platform (see Post model).
+   */
+  publishMultiPlatformPost: async (profileId: string, content: string, platforms: string[], mediaUrl?: string, mediaUrls?: string[]) => {
+    try {
+      if (!profileId) throw new Error('Security Error: profileId is required for multi-tenant isolation.');
+      if (!platforms || platforms.length === 0) throw new Error('At least one platform is required.');
+
+      const accountsResp = await axios.get(`${ZERNIO_API_URL}/accounts`, {
+        params: { profileId },
+        headers: { 'Authorization': `Bearer ${getApiKey()}` }
+      });
+      const accounts = accountsResp.data?.accounts || accountsResp.data?.data || accountsResp.data || [];
+
+      const targets: { platform: string; accountId: string }[] = [];
+      const unlinked: string[] = [];
+      for (const platform of platforms) {
+        const account = accounts.find((a: any) => isPlatformMatching(a.platform || a.type || '', platform));
+        if (account) {
+          targets.push({ platform, accountId: account.id || account.accountId || account._id });
+        } else {
+          unlinked.push(platform);
+        }
+      }
+      if (targets.length === 0) {
+        throw new Error(`None of the requested platforms are linked to this profile: ${unlinked.join(', ')}`);
+      }
+
+      const postData: any = {
+        content,
+        publishNow: true,
+        platforms: targets,
+        mediaUrls: (mediaUrls && mediaUrls.length > 0) ? mediaUrls : (mediaUrl ? [mediaUrl] : undefined)
+      };
+
+      const response = await axios.post(`${ZERNIO_API_URL}/posts`, postData, {
+        headers: { 'Authorization': `Bearer ${getApiKey()}` }
+      });
+
+      // unlinked is surfaced rather than silently dropped — a post that was
+      // supposed to go to 3 platforms but only 2 are actually connected
+      // should say so, not just quietly publish to fewer than asked.
+      return { ...response.data, unlinkedPlatforms: unlinked };
+    } catch (error: any) {
+      console.error('Zernio multi-platform publish error:', error.response?.data || error.message);
+      throw new Error(`Multi-platform post failed: ${error.response?.data?.error || error.message}`);
+    }
+  },
+
+  /**
    * Step 5: Finalize Headless Connection
    * Automatically selects the first available page/profile to complete the link.
    */

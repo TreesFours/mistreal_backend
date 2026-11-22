@@ -45,6 +45,20 @@ export const getAddonCatalog = (): AddonDefinition[] => [
         priceUsd: process.env.ADDON_SMS_PRICE_USD || '1.00',
         playProductId: process.env.ADDON_SMS_PLAY_PRODUCT_ID || 'addon_sms_notifications_monthly',
         stripePriceId: process.env.ADDON_SMS_STRIPE_PRICE_ID || null
+    },
+    {
+        // Reserves the pricing/addon slot only — this unlocks the UI entry
+        // point, the actual voice-cloning pipeline (recording flow + calling
+        // ElevenLabs' API + swapping it in wherever TTS runs today) isn't
+        // built yet. ElevenLabs itself is still BYOK: this fee is for the
+        // Mistreal-side integration, not a markup on ElevenLabs' own usage,
+        // which the user pays ElevenLabs directly via their own key.
+        id: 'voice_cloning',
+        label: 'Voice Cloning (BYOK)',
+        description: 'Unlocks AI voice cloning for spoken AI replies and voice notes — bring your own ElevenLabs API key, configured in Settings.',
+        priceUsd: process.env.ADDON_VOICE_CLONING_PRICE_USD || '3.99',
+        playProductId: process.env.ADDON_VOICE_CLONING_PLAY_PRODUCT_ID || 'addon_voice_cloning_monthly',
+        stripePriceId: process.env.ADDON_VOICE_CLONING_STRIPE_PRICE_ID || null
     }
 ];
 

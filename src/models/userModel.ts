@@ -77,6 +77,17 @@ export class User extends Model {
     public byokVideoBaseUrl!: string | null;
     public byokVideoModelName!: string | null;
 
+    // 🗣️ Separate BYOK slot for voice CLONING (ElevenLabs) — same shape as
+    // byokVideo* above, plus byokVoiceCloneId: unlike video-edit, this
+    // provider has a create-once-reuse-many-times artifact (the cloned
+    // voice itself) that has to persist across requests, not just a key.
+    public byokVoiceEnabled!: boolean;
+    public byokVoiceProviderType!: string | null; // 'elevenlabs' | 'custom'
+    public byokVoiceEncryptedKey!: string | null;
+    public byokVoiceBaseUrl!: string | null;
+    public byokVoiceModelName!: string | null;
+    public byokVoiceCloneId!: string | null; // the provider's voice_id once a clone has been created
+
     // 🎨 Which saved AiProviderConfig (if any) handles image/video GENERATION —
     // null means "Our Recommended" (Imagen/Veo). Separate from the byokVideo*
     // fields above, which are specifically for EDITING an existing video, not
@@ -149,6 +160,14 @@ User.init({
     byokVideoEncryptedKey: { type: DataTypes.TEXT, allowNull: true },
     byokVideoBaseUrl: { type: DataTypes.STRING, allowNull: true },
     byokVideoModelName: { type: DataTypes.STRING, allowNull: true },
+
+    // 🗣️ Separate BYOK slot for voice cloning (see class field comment above)
+    byokVoiceEnabled: { type: DataTypes.BOOLEAN, defaultValue: false },
+    byokVoiceProviderType: { type: DataTypes.STRING, allowNull: true },
+    byokVoiceEncryptedKey: { type: DataTypes.TEXT, allowNull: true },
+    byokVoiceBaseUrl: { type: DataTypes.STRING, allowNull: true },
+    byokVoiceModelName: { type: DataTypes.STRING, allowNull: true },
+    byokVoiceCloneId: { type: DataTypes.STRING, allowNull: true },
 
     activeImageGenConfigId: { type: DataTypes.INTEGER, allowNull: true },
     activeVideoGenConfigId: { type: DataTypes.INTEGER, allowNull: true },
@@ -238,6 +257,48 @@ SocialEvent.init({
     sequelize,
     modelName: 'SocialEvent',
     tableName: 'SocialEvents'
+});
+
+/**
+ * 📣 POST MODEL
+ * One Mistreal-side row per post, even when it fans out to multiple
+ * platforms at once — this is the piece that didn't exist before: Zernio's
+ * own /posts endpoint already accepts a `platforms: [{platform, accountId}, ...]`
+ * array and returns ONE unified id for the whole multi-platform post
+ * (confirmed against zernio.com's real OpenAPI spec — "one post id
+ * represents the entire multi-platform operation"), but nothing in this
+ * codebase called it with more than one platform entry before, and nothing
+ * stored a single Mistreal record spanning multiple platforms either. This
+ * is what lets the feed show one post instead of one per platform, and
+ * lets comments from every platform it went to aggregate under it.
+ */
+export class Post extends Model {
+    public id!: string;
+    public deviceId!: string;
+    public content!: string;
+    public mediaUrl!: string | null;
+    public platforms!: string[];
+    // Zernio's single unified post id for this (possibly multi-platform) post —
+    // null if the Zernio call failed outright, in which case this row exists
+    // purely as a local record of the attempt.
+    public zernioPostId!: string | null;
+    public status!: string; // 'success' | 'failed'
+    public error!: string | null;
+}
+
+Post.init({
+    id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+    deviceId: { type: DataTypes.STRING, allowNull: false },
+    content: { type: DataTypes.TEXT, allowNull: true },
+    mediaUrl: { type: DataTypes.STRING, allowNull: true },
+    platforms: { type: DataTypes.JSONB, defaultValue: [] },
+    zernioPostId: { type: DataTypes.STRING, allowNull: true },
+    status: { type: DataTypes.STRING, defaultValue: 'success' },
+    error: { type: DataTypes.TEXT, allowNull: true }
+}, {
+    sequelize,
+    modelName: 'Post',
+    tableName: 'Posts'
 });
 
 export { sequelize };

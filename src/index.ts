@@ -24,7 +24,7 @@ import { getWeatherData } from './services/weatherService';
 import { getDetailedAstroData } from './services/astroService';
 import { IntelligenceService } from './services/intelligenceService';
 import { getNearbyPlaces } from './services/discoveryService';
-import { User, DelayedAction, IntelligenceBuffer } from './models/userModel';
+import { User, DelayedAction, IntelligenceBuffer, Post } from './models/userModel'; // Post imported for Sequelize registration — table is created by sequelize.sync below
 import { PinnedIntel } from './models/PinnedIntel';
 import { SocialToken } from './models/SocialToken';
 import { EmailMessage } from './models/EmailMessage'; // imported for Sequelize registration — table is created by sequelize.sync below

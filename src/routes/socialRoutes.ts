@@ -2,10 +2,10 @@ import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import { Op } from 'sequelize';
 import { UnifiedSocialService } from '../services/socialPlatforms/unified';
-import { createConnectSession, getAvailablePlatforms, sendSocialAction, exchangeOAuthCode, disconnectPlatform, getPlatformContacts, getUnreadMessages, getSocialHistory, reconcileUserPlatforms, normalizePlatformId, isPlatformMatching, setContactAutoReply } from '../services/socialService';
+import { createConnectSession, getAvailablePlatforms, sendSocialAction, exchangeOAuthCode, disconnectPlatform, getPlatformContacts, getUnreadMessages, getSocialHistory, reconcileUserPlatforms, normalizePlatformId, isPlatformMatching, setContactAutoReply, createMultiPlatformPost, getAggregatedComments, addCommentToPost } from '../services/socialService';
 import { ZernioAdapter } from '../services/socialPlatforms/zernioAdapter';
 import { YoutubeNativeAuth, uploadYoutubeVideo } from '../services/socialPlatforms/youtubeNative';
-import { User, SocialEvent } from '../models/userModel';
+import { User, SocialEvent, Post } from '../models/userModel';
 import { WebhookService } from '../services/webhookService';
 import { authenticateUser, optionalAuthenticateUser } from '../utils/authMiddleware';
 import logger from '../utils/logger';
@@ -362,6 +362,73 @@ router.post('/action', authenticateUser, validate(socialActionSchema), async (re
         const result = await sendSocialAction(user, { platform, type, content, targetId, mediaUrl, mediaUrls, shareToCommunity, mistrealOnly });
         res.json(result);
     } catch (error: any) { res.status(500).json({ error: error.message }); }
+});
+
+/**
+ * One post, multiple platforms at once — keeps exactly one Mistreal
+ * record (see Post model), unlike the single-platform /action above which
+ * the UI would otherwise have to call once per platform, creating N
+ * disconnected posts with no shared comment thread.
+ */
+router.post('/posts/multi', authenticateUser, async (req: Request, res: Response) => {
+    try {
+        const user = await getResolvedUser(req);
+        if (!user) return res.status(404).json({ error: 'User not found' });
+        const { content, platforms, mediaBase64, mediaMimeType } = req.body;
+        if (!Array.isArray(platforms) || platforms.length === 0) {
+            return res.status(200).json({ success: false, error: 'At least one platform is required' });
+        }
+        let mediaUrl: string | undefined;
+        if (mediaBase64) {
+            const id = storeMediaBase64(mediaBase64, mediaMimeType || 'image/jpeg');
+            mediaUrl = buildMediaUrl(id);
+        }
+        const result = await createMultiPlatformPost(user, { content, platforms, mediaUrl });
+        res.json(result);
+    } catch (error: any) {
+        res.status(200).json({ success: false, error: error.message });
+    }
+});
+
+// This device's own multi-platform posts, newest first — what the feed
+// renders as "my posts" (one entry each, regardless of platform count).
+router.get('/posts', authenticateUser, async (req: Request, res: Response) => {
+    try {
+        const user = await getResolvedUser(req);
+        if (!user) return res.status(404).json({ error: 'User not found' });
+        const posts = await Post.findAll({
+            where: { deviceId: user.deviceId },
+            order: [['createdAt', 'DESC']],
+            limit: 50
+        });
+        res.json({ success: true, posts });
+    } catch (error: any) {
+        res.status(200).json({ success: false, error: error.message });
+    }
+});
+
+router.get('/posts/:postId/comments', authenticateUser, async (req: Request, res: Response) => {
+    try {
+        const user = await getResolvedUser(req);
+        if (!user) return res.status(404).json({ error: 'User not found' });
+        const comments = await getAggregatedComments(user, req.params.postId);
+        res.json({ success: true, comments });
+    } catch (error: any) {
+        res.status(200).json({ success: false, error: error.message });
+    }
+});
+
+router.post('/posts/:postId/comments', authenticateUser, async (req: Request, res: Response) => {
+    try {
+        const user = await getResolvedUser(req);
+        if (!user) return res.status(404).json({ error: 'User not found' });
+        const { content } = req.body;
+        if (!content) return res.status(200).json({ success: false, error: 'content is required' });
+        const result = await addCommentToPost(user, req.params.postId, content);
+        res.json(result);
+    } catch (error: any) {
+        res.status(200).json({ success: false, error: error.message });
+    }
 });
 
 /**

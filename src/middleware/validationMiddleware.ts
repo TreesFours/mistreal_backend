@@ -108,6 +108,40 @@ export const byokVideoKeySchema = z.object({
     })
 });
 
+// Separate BYOK slot for voice cloning (see userModel.ts byokVoice* fields)
+// — same shape as byokVideoKeySchema, same reasoning (a user might run a
+// different provider per capability at once).
+export const byokVoiceKeySchema = z.object({
+    body: z.object({
+        deviceId: z.string({ required_error: "deviceId is required" }),
+        firebaseUid: z.string().optional(),
+        providerType: z.enum(['elevenlabs', 'custom'], {
+            required_error: "providerType is required"
+        }),
+        apiKey: z.string({ required_error: "apiKey is required" }).min(10, "apiKey looks too short to be valid"),
+        baseUrl: z.string().url().optional(),
+        modelName: z.string().optional(),
+    })
+});
+
+// The audio sample itself arrives via multer (multipart), not JSON — this
+// only validates the fields that ride alongside it in the form body.
+export const voiceCloneCreateSchema = z.object({
+    body: z.object({
+        deviceId: z.string({ required_error: "deviceId is required" }),
+        firebaseUid: z.string().optional(),
+        name: z.string().min(1).max(60).optional(),
+    })
+});
+
+export const voiceCloneSynthesizeSchema = z.object({
+    body: z.object({
+        deviceId: z.string({ required_error: "deviceId is required" }),
+        firebaseUid: z.string().optional(),
+        text: z.string({ required_error: "text is required" }).min(1).max(2000),
+    })
+});
+
 // Saved image/video GENERATION provider configs — a user can add several and
 // switch which is active, unlike the single-slot BYOK schemas above.
 export const mediaProviderConfigSchema = z.object({

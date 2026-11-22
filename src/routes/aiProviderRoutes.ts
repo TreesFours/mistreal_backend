@@ -1,9 +1,13 @@
 import { Router, Request, Response } from 'express';
-import { validate, byokKeySchema, byokClearSchema, byokVideoKeySchema, mediaProviderConfigSchema, mediaProviderActivateSchema } from '../middleware/validationMiddleware';
+import multer from 'multer';
+import { validate, byokKeySchema, byokClearSchema, byokVideoKeySchema, byokVoiceKeySchema, voiceCloneCreateSchema, voiceCloneSynthesizeSchema, mediaProviderConfigSchema, mediaProviderActivateSchema } from '../middleware/validationMiddleware';
 import { getOrCreateUserInternal } from '../utils/userResolver';
-import { encrypt, isEncryptionConfigured } from '../utils/secretCrypto';
+import { encrypt, decrypt, isEncryptionConfigured } from '../utils/secretCrypto';
+import { VoiceCloneProvider } from '../services/ai/voiceCloneProvider';
 import { AiProviderConfig } from '../models/AiProviderConfig';
 import logger from '../utils/logger';
+
+const audioUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
 const router = Router();
 
@@ -157,6 +161,168 @@ router.get('/video-status', async (req: Request, res: Response) => {
         });
     } catch (error: any) {
         logger.error(`❌ BYOK video-status fetch error: ${error.message}`);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+router.post('/voice-key', validate(byokVoiceKeySchema), async (req: Request, res: Response) => {
+    try {
+        if (!isEncryptionConfigured()) {
+            return res.status(503).json({ success: false, error: 'BYOK_UNAVAILABLE: encryption not configured on this server.' });
+        }
+
+        const { deviceId, firebaseUid, providerType, apiKey, baseUrl, modelName } = req.body;
+        const user = await getOrCreateUserInternal(deviceId, firebaseUid);
+        if (!user) return res.status(404).json({ success: false, error: 'User system unavailable' });
+
+        user.byokVoiceEnabled = true;
+        user.byokVoiceProviderType = providerType;
+        user.byokVoiceEncryptedKey = encrypt(apiKey);
+        user.byokVoiceBaseUrl = baseUrl ?? null;
+        user.byokVoiceModelName = modelName ?? null;
+        await user.save();
+
+        res.json({
+            success: true,
+            configured: true,
+            providerType: user.byokVoiceProviderType,
+            modelName: user.byokVoiceModelName,
+            baseUrl: user.byokVoiceBaseUrl,
+            hasVoiceClone: !!user.byokVoiceCloneId
+        });
+    } catch (error: any) {
+        logger.error(`❌ BYOK voice key save error: ${error.message}`);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+router.post('/voice-clear', validate(byokClearSchema), async (req: Request, res: Response) => {
+    try {
+        const { deviceId, firebaseUid } = req.body;
+        const user = await getOrCreateUserInternal(deviceId, firebaseUid);
+        if (!user) return res.status(404).json({ success: false, error: 'User system unavailable' });
+
+        // Best-effort remote cleanup before clearing the local reference —
+        // never blocks the clear itself if the remote call fails.
+        if (user.byokVoiceCloneId && user.byokVoiceEncryptedKey) {
+            try {
+                await VoiceCloneProvider.deleteVoice(
+                    user.byokVoiceProviderType || 'elevenlabs',
+                    decrypt(user.byokVoiceEncryptedKey),
+                    user.byokVoiceBaseUrl,
+                    user.byokVoiceCloneId
+                );
+            } catch { /* already logged inside deleteVoice */ }
+        }
+
+        user.byokVoiceEnabled = false;
+        user.byokVoiceProviderType = null;
+        user.byokVoiceEncryptedKey = null;
+        user.byokVoiceBaseUrl = null;
+        user.byokVoiceModelName = null;
+        user.byokVoiceCloneId = null;
+        await user.save();
+
+        res.json({ success: true, configured: false });
+    } catch (error: any) {
+        logger.error(`❌ BYOK voice key clear error: ${error.message}`);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+router.get('/voice-status', async (req: Request, res: Response) => {
+    try {
+        const deviceId = req.query.deviceId as string;
+        if (!deviceId) return res.status(400).json({ success: false, error: 'deviceId is required' });
+
+        const user = await getOrCreateUserInternal(deviceId, req.query.firebaseUid as string | undefined);
+        if (!user) return res.status(404).json({ success: false, error: 'User system unavailable' });
+
+        res.json({
+            success: true,
+            configured: !!user.byokVoiceEnabled,
+            providerType: user.byokVoiceProviderType,
+            modelName: user.byokVoiceModelName,
+            baseUrl: user.byokVoiceBaseUrl,
+            hasVoiceClone: !!user.byokVoiceCloneId
+        });
+    } catch (error: any) {
+        logger.error(`❌ BYOK voice-status fetch error: ${error.message}`);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * Creates (or replaces) the user's cloned voice from one uploaded audio
+ * sample. Requires a voice key already saved via /voice-key — doesn't
+ * accept an inline apiKey here, so the key never has to ride alongside a
+ * multipart file upload.
+ */
+router.post('/voice-clone', audioUpload.single('audio'), validate(voiceCloneCreateSchema), async (req: Request, res: Response) => {
+    try {
+        const { deviceId, firebaseUid, name } = req.body;
+        if (!req.file) return res.status(400).json({ success: false, error: 'An audio sample file is required.' });
+
+        const user = await getOrCreateUserInternal(deviceId, firebaseUid);
+        if (!user) return res.status(404).json({ success: false, error: 'User system unavailable' });
+        if (!user.byokVoiceEnabled || !user.byokVoiceEncryptedKey) {
+            return res.status(400).json({ success: false, error: 'Save a voice provider key first (Settings → Voice Cloning).' });
+        }
+
+        const apiKey = decrypt(user.byokVoiceEncryptedKey);
+        const result = await VoiceCloneProvider.createClone(
+            user.byokVoiceProviderType || 'elevenlabs',
+            apiKey,
+            user.byokVoiceBaseUrl,
+            name || 'My Mistreal Voice',
+            req.file.buffer,
+            req.file.mimetype || 'audio/mpeg'
+        );
+
+        if (!result.success || !result.voiceId) {
+            return res.status(200).json({ success: false, error: result.error || 'Voice clone creation failed.' });
+        }
+
+        user.byokVoiceCloneId = result.voiceId;
+        await user.save();
+
+        res.json({ success: true, voiceId: result.voiceId });
+    } catch (error: any) {
+        logger.error(`❌ Voice clone creation error: ${error.message}`);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+router.post('/voice-clone/synthesize', validate(voiceCloneSynthesizeSchema), async (req: Request, res: Response) => {
+    try {
+        const { deviceId, firebaseUid, text } = req.body;
+        const user = await getOrCreateUserInternal(deviceId, firebaseUid);
+        if (!user) return res.status(404).json({ success: false, error: 'User system unavailable' });
+        if (!user.byokVoiceEnabled || !user.byokVoiceEncryptedKey || !user.byokVoiceCloneId) {
+            return res.status(200).json({ success: false, error: 'No cloned voice configured yet.' });
+        }
+
+        const apiKey = decrypt(user.byokVoiceEncryptedKey);
+        const result = await VoiceCloneProvider.synthesize(
+            user.byokVoiceProviderType || 'elevenlabs',
+            apiKey,
+            user.byokVoiceBaseUrl,
+            user.byokVoiceCloneId,
+            text,
+            user.byokVoiceModelName
+        );
+
+        if (!result.success || !result.audioBuffer) {
+            return res.status(200).json({ success: false, error: result.error || 'Speech synthesis failed.' });
+        }
+
+        res.json({
+            success: true,
+            audioBase64: result.audioBuffer.toString('base64'),
+            mimeType: result.mimeType || 'audio/mpeg'
+        });
+    } catch (error: any) {
+        logger.error(`❌ Voice clone synthesis error: ${error.message}`);
         res.status(500).json({ success: false, error: error.message });
     }
 });

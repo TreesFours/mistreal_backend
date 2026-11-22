@@ -359,9 +359,23 @@ export class IntelligenceService {
             }
         }
 
-        // Fallback default news if all lookups yielded 0 articles
+        // Fallback default news if all lookups yielded 0 articles — but only to
+        // seed a cold-start buffer. These titles are hardcoded strings, so if we
+        // injected them on every failed fetch, updateBuffer's dedupe-by-title
+        // would treat them as "already seen" forever and the buffer would be
+        // permanently stuck on this placeholder (this was the actual root cause
+        // of news looking frozen — any transient RSS/NewsAPI failure would wedge
+        // the feed on these two fake articles with no way to recover).
         if (allArticles.length === 0) {
-            logger.info('📌 Injecting fallback default news articles into Intelligence Buffer.');
+            const [existingBuffer] = await IntelligenceBuffer.findOrCreate({
+                where: { category: 'news' },
+                defaults: { category: 'news', items: [] }
+            });
+            if ((existingBuffer.items || []).length > 0) {
+                logger.warn('⚠️ [Intel] News fetch yielded 0 articles — keeping existing buffer instead of overwriting with placeholders.');
+                return;
+            }
+            logger.info('📌 Injecting fallback default news articles into Intelligence Buffer (cold start, no existing data).');
             allArticles.push(
                 {
                     title: "[Intelligence] Neural Link Architecture Deployed Globally",
@@ -442,16 +456,13 @@ export class IntelligenceService {
 
     private static async refreshWiki() {
         try {
-            const [buffer] = await IntelligenceBuffer.findOrCreate({
-                where: { category: 'wiki' },
-                defaults: { category: 'wiki', items: [] }
-            });
-
-            const lastUpdatedDate = new Date(buffer.lastUpdated).toDateString();
-            const todayDate = new Date().toDateString();
-
-            if (lastUpdatedDate === todayDate && (buffer.items || []).length >= 3) return;
-
+            // Previously gated to "once per calendar day" via a lastUpdated check,
+            // which meant every hourly refreshGlobalIntel tick after the first
+            // successful one of the day was a silent no-op — wiki only ever
+            // looked "fresh" once every 24h while news/journals/novels refresh
+            // hourly. Removed so it follows the same hourly cadence as the rest
+            // of the feed; updateBuffer's dedupe-by-title already prevents churn
+            // if the random-article endpoint happens to repeat a title.
             const articles: any[] = [];
             for (let i = 0; i < 3; i++) {
                 try {
