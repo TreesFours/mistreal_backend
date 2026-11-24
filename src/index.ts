@@ -133,6 +133,7 @@ const seedGamesIfEmpty = async () => {
                 { thumbnailUrl: 'https://images.unsplash.com/photo-1529699211952-734e80c4d42b?w=400' },
                 { where: { title: 'Chess', thumbnailUrl: null } }
             );
+            await seedAirforceAssaultIfMissing();
             return;
         }
 
@@ -146,9 +147,32 @@ const seedGamesIfEmpty = async () => {
             { title: 'Chess Master', description: 'Play chess against AI or real opponents.', category: 'Strategy', sourceType: 'external', externalUrl: 'https://lichess.org/', thumbnailUrl: 'https://images.unsplash.com/photo-1529699211952-734e80c4d42b?w=400' },
             { title: 'Super Mario HTML5', description: 'Run, jump, and collect coins in Super Mario.', category: 'Arcade', sourceType: 'external', externalUrl: 'https://supermarioplay.com/', thumbnailUrl: 'https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=400' }
         ]);
+        await seedAirforceAssaultIfMissing();
         console.log('✅ Seeded initial rich games catalog with images & action games');
     } catch (err: any) {
         console.error('❌ Game seed failed:', err.message);
+    }
+};
+
+// Our own hosted game (real-time 3D via Three.js, served from
+// /games-static/airforce-assault) — findOrCreate so re-running this on
+// every boot never duplicates it, same idempotency the thumbnail backfill
+// above already relies on.
+const seedAirforceAssaultIfMissing = async () => {
+    try {
+        await Game.findOrCreate({
+            where: { hostedSlug: 'airforce-assault' },
+            defaults: {
+                title: 'Airforce Assault',
+                description: 'Hold the ground line against a falling drone/mine assault, then take to the sky to finish the enemy base. Switch between 4 pilots on the fly.',
+                category: 'Action',
+                sourceType: 'hosted',
+                hostedSlug: 'airforce-assault',
+                thumbnailUrl: null
+            }
+        });
+    } catch (err: any) {
+        console.error('❌ Airforce Assault seed failed:', err.message);
     }
 };
 

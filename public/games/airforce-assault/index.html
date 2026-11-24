@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Airforce Assault</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #000; font-family: -apple-system, Helvetica, Arial, sans-serif; touch-action: none; }
+  canvas { display: block; }
+  #hud { position: fixed; top: 0; left: 0; right: 0; padding: 10px 14px; color: #fff; display: flex; justify-content: space-between; align-items: flex-start; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,0.8); z-index: 10; }
+  #hud .stat { font-size: 13px; font-weight: 600; letter-spacing: 0.03em; }
+  #hpBarWrap { width: 140px; height: 10px; background: rgba(255,255,255,0.25); border-radius: 5px; overflow: hidden; margin-top: 4px; }
+  #hpBar { height: 100%; width: 100%; background: #3ddc6a; transition: width 0.15s; }
+  #pilotBtn { pointer-events: auto; background: rgba(0,0,0,0.5); color: #fff; border: 1px solid rgba(255,255,255,0.4); border-radius: 8px; padding: 6px 10px; font-size: 12px; font-weight: 700; }
+  #stageBanner { position: fixed; top: 40%; left: 0; right: 0; text-align: center; color: #fff; font-size: 26px; font-weight: 800; text-shadow: 0 2px 8px rgba(0,0,0,0.9); letter-spacing: 0.04em; z-index: 10; pointer-events: none; opacity: 0; transition: opacity 0.4s; }
+  #joystick, #fireZone { position: fixed; bottom: 0; width: 50%; height: 42%; z-index: 9; }
+  #joystick { left: 0; }
+  #fireZone { right: 0; }
+  #stick { position: absolute; width: 70px; height: 70px; border-radius: 50%; background: rgba(255,255,255,0.18); border: 2px solid rgba(255,255,255,0.5); }
+  #stickKnob { position: absolute; width: 34px; height: 34px; border-radius: 50%; background: rgba(255,255,255,0.75); left: 18px; top: 18px; }
+  #endScreen { position: fixed; inset: 0; background: rgba(0,0,0,0.88); color: #fff; display: none; flex-direction: column; align-items: center; justify-content: center; z-index: 20; text-align: center; padding: 24px; }
+  #endScreen h1 { font-size: 30px; margin: 0 0 8px; }
+  #endScreen p { font-size: 15px; color: #ccc; margin: 0 0 20px; }
+  #endScreen button { background: #3ddc6a; color: #04210f; border: none; border-radius: 10px; padding: 12px 28px; font-size: 16px; font-weight: 800; }
+</style>
+</head>
+<body>
+<div id="hud">
+  <div>
+    <div class="stat" id="stageLabel">STAGE 1 · GROUND DEFENSE</div>
+    <div class="stat">SCORE <span id="score">0</span></div>
+    <div id="hpBarWrap"><div id="hpBar"></div></div>
+  </div>
+  <button id="pilotBtn">PILOT: ACE</button>
+</div>
+<div id="stageBanner"></div>
+<div id="joystick"><div id="stick"><div id="stickKnob"></div></div></div>
+<div id="fireZone"></div>
+<div id="endScreen">
+  <h1 id="endTitle">Mission Complete</h1>
+  <p id="endSubtitle">The base is down.</p>
+  <button onclick="location.reload()">PLAY AGAIN</button>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script>
+/**
+ * Airforce Assault — a real, playable single-player low-poly 3D shooter.
+ * Honest about what this is: geometric primitives (boxes/cones/spheres),
+ * not modeled/animated characters, and no real networked multiplayer.
+ * "Pilot switching" is a single-player character-swap (color + stat
+ * variation), not a teammate AI or a second player.
+ *
+ * Three stages, one continuous session: Ground Defense (shoot drones/mines
+ * falling toward your position) -> Flight Combat (fly through waves of
+ * enemies) -> Base Assault (bigger targets + a boss plane to end it).
+ */
+(function () {
+  "use strict";
+
+  // ---------- Renderer / scene / camera ----------
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  document.body.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  scene.fog = new THREE.Fog(0x0b1030, 20, 140);
+  scene.background = new THREE.Color(0x0b1030);
+
+  const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 500);
+
+  scene.add(new THREE.AmbientLight(0x8899cc, 0.7));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.9);
+  sun.position.set(20, 40, 10);
+  scene.add(sun);
+
+  window.addEventListener("resize", () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  // ---------- Pilots (single-player character swap, not multiplayer) ----------
+  const PILOTS = [
+    { name: "ACE", color: 0x3ddc6a, speed: 1.0, fireRate: 1.0 },
+    { name: "RAVEN", color: 0x3da2ff, speed: 1.15, fireRate: 0.85 },
+    { name: "FOX", color: 0xffb13d, speed: 0.9, fireRate: 1.25 },
+    { name: "GHOST", color: 0xd23dff, speed: 1.05, fireRate: 1.05 }
+  ];
+  let pilotIndex = 0;
+  const pilotBtn = document.getElementById("pilotBtn");
+  function activePilot() { return PILOTS[pilotIndex]; }
+  function refreshPilotLabel() { pilotBtn.textContent = "PILOT: " + activePilot().name; }
+  pilotBtn.addEventListener("click", () => {
+    pilotIndex = (pilotIndex + 1) % PILOTS.length;
+    refreshPilotLabel();
+    applyPilotColor();
+  });
+  refreshPilotLabel();
+
+  // ---------- Player state ----------
+  const player = {
+    hp: 100,
+    maxHp: 100,
+    score: 0,
+    x: 0, y: 0, z: 0,
+    fireCooldown: 0,
+    mesh: null
+  };
+
+  function makeGroundPlayerMesh() {
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.ConeGeometry(0.6, 1.8, 8), new THREE.MeshStandardMaterial({ color: activePilot().color }));
+    body.rotation.x = Math.PI; // nose up
+    g.add(body);
+    return g;
+  }
+  function makePlaneMesh() {
+    const g = new THREE.Group();
+    const fuselage = new THREE.Mesh(new THREE.ConeGeometry(0.5, 2.6, 6), new THREE.MeshStandardMaterial({ color: activePilot().color }));
+    fuselage.rotation.x = -Math.PI / 2;
+    g.add(fuselage);
+    const wingMat = new THREE.MeshStandardMaterial({ color: 0xdddddd });
+    const wing = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.1, 0.6), wingMat);
+    g.add(wing);
+    return g;
+  }
+  function applyPilotColor() {
+    if (!player.mesh) return;
+    player.mesh.traverse((obj) => {
+      if (obj.isMesh && obj.material && obj.material.color && obj === player.mesh.children[0]) {
+        obj.material.color.setHex(activePilot().color);
+      }
+    });
+  }
+
+  // ---------- Projectiles / enemies (generic pools) ----------
+  const bullets = []; // { mesh, vel, life }
+  const enemies = []; // { mesh, kind, hp, vel, scoreValue }
+
+  function spawnBullet(origin, dir, speed) {
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.12, 6, 6), new THREE.MeshBasicMaterial({ color: 0xfff26b }));
+    mesh.position.copy(origin);
+    scene.add(mesh);
+    bullets.push({ mesh, vel: dir.clone().multiplyScalar(speed), life: 2.5 });
+  }
+
+  function removeBullet(i) { scene.remove(bullets[i].mesh); bullets.splice(i, 1); }
+  function removeEnemy(i) { scene.remove(enemies[i].mesh); enemies.splice(i, 1); }
+
+  function damagePlayer(amount) {
+    player.hp = Math.max(0, player.hp - amount);
+    updateHud();
+    if (player.hp <= 0) endGame(false);
+  }
+  function addScore(amount) { player.score += amount; updateHud(); }
+
+  // ---------- HUD ----------
+  const hpBar = document.getElementById("hpBar");
+  const scoreEl = document.getElementById("score");
+  const stageLabel = document.getElementById("stageLabel");
+  function updateHud() {
+    hpBar.style.width = Math.max(0, (player.hp / player.maxHp) * 100) + "%";
+    hpBar.style.background = player.hp > 50 ? "#3ddc6a" : player.hp > 20 ? "#ffb13d" : "#ff4d4d";
+    scoreEl.textContent = player.score;
+  }
+  updateHud();
+
+  function showBanner(text, ms) {
+    const b = document.getElementById("stageBanner");
+    b.textContent = text;
+    b.style.opacity = "1";
+    clearTimeout(b._t);
+    b._t = setTimeout(() => { b.style.opacity = "0"; }, ms || 1600);
+  }
+
+  function endGame(won) {
+    gameState.phase = "ended";
+    const el = document.getElementById("endScreen");
+    document.getElementById("endTitle").textContent = won ? "Base Destroyed" : "Shot Down";
+    document.getElementById("endSubtitle").textContent = won
+      ? "Final score: " + player.score
+      : "Final score: " + player.score + " — tap to try again.";
+    el.style.display = "flex";
+  }
+
+  // ---------- Touch controls: left joystick (move), right zone (fire) ----------
+  const joy = { active: false, dx: 0, dy: 0, id: null };
+  const stick = document.getElementById("stick");
+  const knob = document.getElementById("stickKnob");
+  const joyZone = document.getElementById("joystick");
+
+  function stickCenter() {
+    const r = stick.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  }
+  joyZone.addEventListener("touchstart", (e) => {
+    const t = e.changedTouches[0];
+    joy.active = true; joy.id = t.identifier;
+    stick.style.left = (t.clientX - 35) + "px";
+    stick.style.top = (t.clientY - 35) + "px";
+    stick.style.position = "fixed";
+    e.preventDefault();
+  }, { passive: false });
+  joyZone.addEventListener("touchmove", (e) => {
+    for (const t of e.changedTouches) {
+      if (t.identifier !== joy.id) continue;
+      const c = stickCenter();
+      let dx = t.clientX - c.x, dy = t.clientY - c.y;
+      const max = 45;
+      const len = Math.hypot(dx, dy);
+      if (len > max) { dx = dx / len * max; dy = dy / len * max; }
+      knob.style.left = (18 + dx) + "px";
+      knob.style.top = (18 + dy) + "px";
+      joy.dx = dx / max; joy.dy = dy / max;
+    }
+    e.preventDefault();
+  }, { passive: false });
+  function resetJoy() {
+    joy.active = false; joy.dx = 0; joy.dy = 0;
+    knob.style.left = "18px"; knob.style.top = "18px";
+  }
+  joyZone.addEventListener("touchend", resetJoy);
+  joyZone.addEventListener("touchcancel", resetJoy);
+
+  let firing = false;
+  const fireZone = document.getElementById("fireZone");
+  fireZone.addEventListener("touchstart", (e) => { firing = true; e.preventDefault(); }, { passive: false });
+  fireZone.addEventListener("touchend", () => { firing = false; });
+  fireZone.addEventListener("touchcancel", () => { firing = false; });
+  // Desktop fallback for testing outside a touch device.
+  window.addEventListener("keydown", (e) => {
+    if (e.key === " ") firing = true;
+    if (e.key === "ArrowLeft") joy.dx = -1;
+    if (e.key === "ArrowRight") joy.dx = 1;
+    if (e.key === "ArrowUp") joy.dy = -1;
+    if (e.key === "ArrowDown") joy.dy = 1;
+  });
+  window.addEventListener("keyup", (e) => {
+    if (e.key === " ") firing = false;
+    if (["ArrowLeft", "ArrowRight"].includes(e.key)) joy.dx = 0;
+    if (["ArrowUp", "ArrowDown"].includes(e.key)) joy.dy = 0;
+  });
+
+  // ---------- Stage machine ----------
+  const gameState = { stage: 1, phase: "playing", wave: 0, waveTimer: 0, transitionTimer: 0 };
+  const WAVES_PER_STAGE = { 1: 5, 2: 5, 3: 1 }; // stage 3's "wave" is the boss
+
+  let ground = null;
+  function buildGroundStage() {
+    scene.children.length = 0;
+    scene.add(new THREE.AmbientLight(0x8899cc, 0.7));
+    scene.add(sun);
+    scene.fog = new THREE.Fog(0x0b1030, 15, 90);
+
+    ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(60, 200),
+      new THREE.MeshStandardMaterial({ color: 0x15213d })
+    );
+    ground.rotation.x = -Math.PI / 2;
+    scene.add(ground);
+
+    player.x = 0; player.y = 0.9; player.z = 0;
+    player.mesh = makeGroundPlayerMesh();
+    player.mesh.position.set(player.x, player.y, player.z);
+    scene.add(player.mesh);
+
+    camera.position.set(0, 4.2, 7);
+  }
+
+  function buildFlightStage() {
+    scene.children.length = 0;
+    scene.add(new THREE.AmbientLight(0xaabbff, 0.8));
+    scene.add(sun);
+    scene.fog = new THREE.Fog(0x1a2550, 20, 140);
+    scene.background = new THREE.Color(0x1a2550);
+
+    player.x = 0; player.y = 0; player.z = 0;
+    player.mesh = makePlaneMesh();
+    scene.add(player.mesh);
+
+    camera.position.set(0, 2.2, 6);
+  }
+
+  let baseTarget = null;
+  let boss = null;
+  function buildBaseAssaultStage() {
+    scene.children.length = 0;
+    scene.add(new THREE.AmbientLight(0xffaa88, 0.75));
+    scene.add(sun);
+    scene.fog = new THREE.Fog(0x331a1a, 20, 150);
+    scene.background = new THREE.Color(0x331a1a);
+
+    player.x = 0; player.y = 0; player.z = 0;
+    player.mesh = makePlaneMesh();
+    scene.add(player.mesh);
+
+    camera.position.set(0, 2.2, 6);
+
+    // Tanks/forts scattered below — visible, shootable targets while flying over.
+    for (let i = 0; i < 6; i++) {
+      const tank = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.9, 2), new THREE.MeshStandardMaterial({ color: 0x5a4a2a }));
+      tank.position.set((Math.random() - 0.5) * 16, -6, -20 - i * 14);
+      scene.add(tank);
+      enemies.push({ mesh: tank, kind: "tank", hp: 20, vel: new THREE.Vector3(0, 0, 0.04), scoreValue: 150 });
+    }
+
+    boss = null; // spawned once tanks are cleared
+  }
+
+  function enterStage(stage) {
+    gameState.stage = stage;
+    gameState.wave = 0;
+    gameState.phase = "playing";
+    enemies.length = 0; bullets.length = 0;
+    player.hp = player.maxHp;
+    updateHud();
+    if (stage === 1) { buildGroundStage(); stageLabel.textContent = "STAGE 1 · GROUND DEFENSE"; showBanner("GROUND DEFENSE — HOLD THE LINE"); }
+    if (stage === 2) { buildFlightStage(); stageLabel.textContent = "STAGE 2 · FLIGHT COMBAT"; showBanner("WHEELS UP — FLIGHT COMBAT"); }
+    if (stage === 3) { buildBaseAssaultStage(); stageLabel.textContent = "STAGE 3 · BASE ASSAULT"; showBanner("FINAL APPROACH — BASE ASSAULT"); }
+  }
+
+  function advanceStage() {
+    if (gameState.stage < 3) {
+      enterStage(gameState.stage + 1);
+    } else {
+      endGame(true);
+    }
+  }
+
+  // ---------- Enemy spawning per stage ----------
+  function spawnGroundEnemy() {
+    const isDrone = Math.random() > 0.35;
+    const mesh = new THREE.Mesh(
+      isDrone ? new THREE.SphereGeometry(0.5, 8, 8) : new THREE.OctahedronGeometry(0.5),
+      new THREE.MeshStandardMaterial({ color: isDrone ? 0xff5d5d : 0xffd23d })
+    );
+    const startX = (Math.random() - 0.5) * 16;
+    mesh.position.set(startX, 10 + Math.random() * 4, -20 - Math.random() * 10);
+    scene.add(mesh);
+    enemies.push({
+      mesh, kind: isDrone ? "drone" : "mine",
+      hp: isDrone ? 2 : 3,
+      vel: new THREE.Vector3(0, -0.045 - Math.random() * 0.02, 0.09),
+      scoreValue: isDrone ? 20 : 30
+    });
+  }
+
+  function spawnFlightEnemy() {
+    const mesh = new THREE.Mesh(new THREE.ConeGeometry(0.45, 1.3, 6), new THREE.MeshStandardMaterial({ color: 0xff7a3d }));
+    mesh.rotation.x = Math.PI / 2;
+    mesh.position.set((Math.random() - 0.5) * 14, (Math.random() - 0.5) * 6, -60 - Math.random() * 20);
+    scene.add(mesh);
+    enemies.push({ mesh, kind: "fighter", hp: 3, vel: new THREE.Vector3(0, 0, 0.14), scoreValue: 40 });
+  }
+
+  function spawnBoss() {
+    const mesh = new THREE.Group();
+    const core = new THREE.Mesh(new THREE.BoxGeometry(3, 1.4, 5), new THREE.MeshStandardMaterial({ color: 0x8a1a1a }));
+    mesh.add(core);
+    mesh.position.set(0, 1, -50);
+    scene.add(mesh);
+    boss = { mesh, hp: 60, maxHp: 60, vel: new THREE.Vector3(0.03, 0, 0), t: 0 };
+    showBanner("ENEMY BOSS PLANE INBOUND", 2000);
+  }
+
+  // ---------- Main loop ----------
+  const clock = new THREE.Clock();
+  enterStage(1);
+
+  function tick() {
+    requestAnimationFrame(tick);
+    const dt = Math.min(clock.getDelta(), 0.05);
+    if (gameState.phase !== "playing") { renderer.render(scene, camera); return; }
+
+    const pilot = activePilot();
+    const moveSpeed = 7 * pilot.speed * dt;
+
+    // --- Player movement, per stage ---
+    if (gameState.stage === 1) {
+      player.x = THREE.MathUtils.clamp(player.x + joy.dx * moveSpeed, -8, 8);
+      player.z = THREE.MathUtils.clamp(player.z - joy.dy * moveSpeed, -6, 4);
+      player.mesh.position.set(player.x, player.y, player.z);
+      camera.position.set(player.x * 0.3, 4.2, player.z + 7);
+      camera.lookAt(player.x, 1, player.z - 10);
+    } else {
+      player.x = THREE.MathUtils.clamp(player.x + joy.dx * moveSpeed * 1.3, -10, 10);
+      player.y = THREE.MathUtils.clamp(player.y - joy.dy * moveSpeed * 1.3, -6, 6);
+      player.mesh.position.set(player.x, player.y, 0);
+      player.mesh.rotation.z = -joy.dx * 0.6;
+      player.mesh.rotation.x = Math.PI / -2 + joy.dy * 0.3;
+      camera.position.set(player.x * 0.5, player.y * 0.5 + 2, 6);
+      camera.lookAt(player.x * 0.5, player.y * 0.5, -20);
+    }
+
+    // --- Firing ---
+    player.fireCooldown -= dt;
+    if (firing && player.fireCooldown <= 0) {
+      player.fireCooldown = 0.18 * pilot.fireRate;
+      const origin = player.mesh.position.clone();
+      origin.y += gameState.stage === 1 ? 1 : 0;
+      const dir = gameState.stage === 1 ? new THREE.Vector3(0, 0, -1) : new THREE.Vector3(0, 0, -1);
+      spawnBullet(origin, dir, 36);
+    }
+
+    // --- Bullets ---
+    for (let i = bullets.length - 1; i >= 0; i--) {
+      const b = bullets[i];
+      b.mesh.position.addScaledVector(b.vel, dt);
+      b.life -= dt;
+      if (b.life <= 0) { removeBullet(i); continue; }
+    }
+
+    // --- Enemy spawning cadence ---
+    gameState.waveTimer -= dt;
+    if (gameState.stage === 1 && gameState.wave < WAVES_PER_STAGE[1]) {
+      if (gameState.waveTimer <= 0) {
+        gameState.waveTimer = 0.9;
+        spawnGroundEnemy();
+      }
+    } else if (gameState.stage === 2 && gameState.wave < WAVES_PER_STAGE[2]) {
+      if (gameState.waveTimer <= 0) {
+        gameState.waveTimer = 1.1;
+        spawnFlightEnemy();
+      }
+    }
+
+    // --- Enemy movement + collision with player / bullets ---
+    for (let i = enemies.length - 1; i >= 0; i--) {
+      const en = enemies[i];
+      en.mesh.position.add(en.vel);
+      en.mesh.rotation.y += dt;
+
+      // Reached/passed the player plane -> damage + despawn.
+      const dz = en.mesh.position.z - player.mesh.position.z;
+      if ((gameState.stage === 1 && dz > 3) || (gameState.stage !== 1 && dz > 4)) {
+        damagePlayer(en.kind === "mine" ? 18 : 10);
+        removeEnemy(i);
+        continue;
+      }
+
+      // Bullet collision (simple distance check — deliberately not physics-accurate).
+      for (let j = bullets.length - 1; j >= 0; j--) {
+        if (bullets[j].mesh.position.distanceTo(en.mesh.position) < 1.1) {
+          removeBullet(j);
+          en.hp -= 1;
+          if (en.hp <= 0) {
+            addScore(en.scoreValue);
+            removeEnemy(i);
+            if (gameState.stage === 1 || gameState.stage === 2) gameState.wave++;
+          }
+          break;
+        }
+      }
+    }
+
+    // --- Boss (stage 3 only, after tanks cleared) ---
+    if (gameState.stage === 3) {
+      if (!boss && enemies.length === 0 && gameState.wave === 0) {
+        gameState.wave = 1;
+        spawnBoss();
+      }
+      if (boss) {
+        boss.t += dt;
+        boss.mesh.position.x = Math.sin(boss.t * 0.6) * 6;
+        boss.mesh.position.z = -45 + Math.sin(boss.t * 0.3) * 6;
+        if (Math.random() < 0.01) damagePlayer(6); // occasional return fire
+        for (let j = bullets.length - 1; j >= 0; j--) {
+          if (bullets[j].mesh.position.distanceTo(boss.mesh.position) < 2.4) {
+            removeBullet(j);
+            boss.hp -= 1;
+            if (boss.hp <= 0) {
+              addScore(500);
+              scene.remove(boss.mesh);
+              boss = null;
+              gameState.wave = 2;
+              advanceStage();
+            }
+          }
+        }
+      }
+    }
+
+    // --- Stage clear check ---
+    if (gameState.stage !== 3 && gameState.wave >= WAVES_PER_STAGE[gameState.stage] && enemies.length === 0) {
+      advanceStage();
+    }
+
+    renderer.render(scene, camera);
+  }
+  tick();
+})();
+</script>
+</body>
+</html>
