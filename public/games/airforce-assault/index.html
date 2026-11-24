@@ -12,7 +12,8 @@
   #hpBarWrap, #fuelBarWrap { width: 140px; height: 10px; background: rgba(255,255,255,0.25); border-radius: 5px; overflow: hidden; margin-top: 4px; }
   #hpBar { height: 100%; width: 100%; background: #3ddc6a; transition: width 0.15s; }
   #fuelBar { height: 100%; width: 100%; background: #3dc4ff; transition: width 0.15s; }
-  #pilotBtn { pointer-events: auto; background: rgba(0,0,0,0.5); color: #fff; border: 1px solid rgba(255,255,255,0.4); border-radius: 8px; padding: 6px 10px; font-size: 12px; font-weight: 700; }
+  #btnCol { pointer-events: auto; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+  #pilotBtn, #weaponBtn { pointer-events: auto; background: rgba(0,0,0,0.5); color: #fff; border: 1px solid rgba(255,255,255,0.4); border-radius: 8px; padding: 6px 10px; font-size: 12px; font-weight: 700; }
   #stageBanner { position: fixed; top: 40%; left: 0; right: 0; text-align: center; color: #fff; font-size: 26px; font-weight: 800; text-shadow: 0 2px 8px rgba(0,0,0,0.9); letter-spacing: 0.04em; z-index: 10; pointer-events: none; opacity: 0; transition: opacity 0.4s; }
   #rearWarning { position: fixed; top: 46%; left: 0; right: 0; text-align: center; color: #ff4d4d; font-size: 15px; font-weight: 800; letter-spacing: 0.08em; text-shadow: 0 2px 6px rgba(0,0,0,0.9); z-index: 10; pointer-events: none; opacity: 0; transition: opacity 0.2s; animation: none; }
   #rearWarning.show { opacity: 1; animation: rearPulse 0.6s infinite; }
@@ -31,12 +32,15 @@
 <body>
 <div id="hud">
   <div>
-    <div class="stat" id="stageLabel">STAGE 1 · GROUND DEFENSE</div>
+    <div class="stat" id="stageLabel">STAGE 1 · BETRAYAL</div>
     <div class="stat">SCORE <span id="score">0</span></div>
     <div id="hpBarWrap"><div id="hpBar"></div></div>
     <div id="fuelBarWrap" style="display:none;"><div id="fuelBar"></div></div>
   </div>
-  <button id="pilotBtn">PILOT: ACE</button>
+  <div id="btnCol">
+    <button id="pilotBtn">PILOT: ACE</button>
+    <button id="weaponBtn">WPN: GUN</button>
+  </div>
 </div>
 <div id="stageBanner"></div>
 <div id="rearWarning">⚠ ENEMY BEHIND YOU — EVADE</div>
@@ -55,11 +59,19 @@
  * Honest about what this is: geometric primitives (boxes/cones/spheres),
  * not modeled/animated characters, and no real networked multiplayer.
  * "Pilot switching" is a single-player character-swap (color + stat
- * variation), not a teammate AI or a second player.
+ * variation), not a teammate AI or a second player. The "wingman" that
+ * flies alongside you in the flight stages is a lightweight scripted
+ * helper (periodic auto-damage to the nearest enemy), not real AI.
  *
- * Three stages, one continuous session: Ground Defense (shoot drones/mines
- * falling toward your position) -> Flight Combat (fly through waves of
- * enemies) -> Base Assault (bigger targets + a boss plane to end it).
+ * Four stages, one continuous session:
+ *   1. Betrayal (ground) — the squad's last stand after a teammate leaked
+ *      your position to the enemy.
+ *   2. Ground Defense (ground) — hold the line against falling drones/mines.
+ *   3. Flight Combat (first-person) — waves of fighters, some in formation,
+ *      some diving in from behind.
+ *   4. Base Assault (first-person) — tanks (some armored, missile-only),
+ *      then the final boss.
+ * Every stage ends in its own boss fight.
  */
 (function () {
   "use strict";
@@ -76,9 +88,9 @@
 
   const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 500);
 
-  scene.add(new THREE.AmbientLight(0x8899cc, 0.7));
-  const sun = new THREE.DirectionalLight(0xffffff, 0.9);
+  let sun = new THREE.DirectionalLight(0xffffff, 0.9);
   sun.position.set(20, 40, 10);
+  scene.add(new THREE.AmbientLight(0x8899cc, 0.7));
   scene.add(sun);
 
   window.addEventListener("resize", () => {
@@ -86,6 +98,84 @@
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
+
+  // ---------- Audio (synthesized via Web Audio — no external sound files) ----------
+  let audioCtx = null;
+  function ensureAudio() {
+    if (!audioCtx) {
+      const Ctor = window.AudioContext || window.webkitAudioContext;
+      if (!Ctor) return;
+      audioCtx = new Ctor();
+    }
+    if (audioCtx.state === "suspended") audioCtx.resume();
+  }
+  function pannerFor(pan) {
+    if (!audioCtx.createStereoPanner) return null;
+    const p = audioCtx.createStereoPanner();
+    p.pan.value = THREE.MathUtils.clamp(pan || 0, -1, 1);
+    return p;
+  }
+  function playShoot(weaponKey) {
+    if (!audioCtx) return;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    if (weaponKey === "missile") {
+      osc.type = "sawtooth"; osc.frequency.value = 180;
+      gain.gain.value = 0.18;
+      osc.connect(gain); gain.connect(audioCtx.destination);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.18);
+      osc.start(); osc.stop(audioCtx.currentTime + 0.18);
+    } else {
+      osc.type = "square"; osc.frequency.value = 820;
+      gain.gain.value = 0.08;
+      osc.connect(gain); gain.connect(audioCtx.destination);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.07);
+      osc.start(); osc.stop(audioCtx.currentTime + 0.07);
+    }
+  }
+  function playExplosion(pan) {
+    if (!audioCtx) return;
+    const dur = 0.4;
+    const bufferSize = Math.floor(audioCtx.sampleRate * dur);
+    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize);
+    const noise = audioCtx.createBufferSource();
+    noise.buffer = buffer;
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.setValueAtTime(1400, audioCtx.currentTime);
+    filter.frequency.exponentialRampToValueAtTime(80, audioCtx.currentTime + dur);
+    const gain = audioCtx.createGain();
+    gain.gain.value = 0.35;
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+    noise.connect(filter);
+    filter.connect(gain);
+    const panner = pannerFor(pan);
+    if (panner) { gain.connect(panner); panner.connect(audioCtx.destination); } else { gain.connect(audioCtx.destination); }
+    noise.start();
+  }
+  // Deliberately lower/muffled vs. playShoot's crisp tone — this is the
+  // audible cue meant to read as "coming from behind you," distinct from
+  // the sharp sounds of things in front of you.
+  function playRearAlert(pan) {
+    if (!audioCtx) return;
+    const osc = audioCtx.createOscillator();
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(520, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(260, audioCtx.currentTime + 0.5);
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.value = 900;
+    const gain = audioCtx.createGain();
+    gain.gain.value = 0.2;
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.5);
+    osc.connect(filter);
+    filter.connect(gain);
+    const panner = pannerFor(pan);
+    if (panner) { gain.connect(panner); panner.connect(audioCtx.destination); } else { gain.connect(audioCtx.destination); }
+    osc.start(); osc.stop(audioCtx.currentTime + 0.5);
+  }
 
   // ---------- Pilots (single-player character swap, not multiplayer) ----------
   const PILOTS = [
@@ -99,11 +189,29 @@
   function activePilot() { return PILOTS[pilotIndex]; }
   function refreshPilotLabel() { pilotBtn.textContent = "PILOT: " + activePilot().name; }
   pilotBtn.addEventListener("click", () => {
+    ensureAudio();
     pilotIndex = (pilotIndex + 1) % PILOTS.length;
     refreshPilotLabel();
     applyPilotColor();
   });
   refreshPilotLabel();
+
+  // ---------- Weapons (switchable; some enemies are armored and only the
+  // missile can hurt them) ----------
+  const WEAPONS = [
+    { key: "gun", label: "GUN", cooldown: 0.18, damage: 1, speed: 42, bulletColor: 0xfff26b, bulletSize: 0.12 },
+    { key: "missile", label: "MISSILE", cooldown: 0.65, damage: 5, speed: 30, bulletColor: 0xff5d3d, bulletSize: 0.22 }
+  ];
+  let weaponIndex = 0;
+  const weaponBtn = document.getElementById("weaponBtn");
+  function activeWeapon() { return WEAPONS[weaponIndex]; }
+  function refreshWeaponLabel() { weaponBtn.textContent = "WPN: " + activeWeapon().label; }
+  weaponBtn.addEventListener("click", () => {
+    ensureAudio();
+    weaponIndex = (weaponIndex + 1) % WEAPONS.length;
+    refreshWeaponLabel();
+  });
+  refreshWeaponLabel();
 
   // ---------- Player state ----------
   const player = {
@@ -143,24 +251,47 @@
     });
   }
 
-  // ---------- Projectiles / enemies (generic pools) ----------
-  const bullets = []; // { mesh, vel, life }
-  const enemies = []; // { mesh, kind, hp, vel, scoreValue }
+  // ---------- Projectiles / enemies / explosions (generic pools) ----------
+  const bullets = []; // { mesh, vel, life, weaponKey, damage }
+  const enemies = []; // { mesh, kind, hp, vel, scoreValue, fromBehind?, squad?, armored? }
+  const explosions = []; // { parts: [{mesh, vel}], life }
 
-  function spawnBullet(origin, dir, speed) {
-    const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.12, 6, 6), new THREE.MeshBasicMaterial({ color: 0xfff26b }));
+  function spawnBullet(origin, dir, weapon) {
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(weapon.bulletSize, 6, 6), new THREE.MeshBasicMaterial({ color: weapon.bulletColor }));
     mesh.position.copy(origin);
     scene.add(mesh);
-    bullets.push({ mesh, vel: dir.clone().multiplyScalar(speed), life: 2.5 });
+    bullets.push({ mesh, vel: dir.clone().multiplyScalar(weapon.speed), life: 2.5, weaponKey: weapon.key, damage: weapon.damage });
   }
 
   function removeBullet(i) { scene.remove(bullets[i].mesh); bullets.splice(i, 1); }
   function removeEnemy(i) { scene.remove(enemies[i].mesh); enemies.splice(i, 1); }
 
+  // A small fragment burst + synthesized boom — used for every enemy/boss
+  // kill, every ramming collision, and the player's own death. Panned left/
+  // right based on where it happened relative to the player, same spatial
+  // cue idea as the rear-attack alert.
+  function explode(position, color) {
+    const parts = [];
+    for (let i = 0; i < 8; i++) {
+      const mat = new THREE.MeshBasicMaterial({ color: color || 0xffaa33, transparent: true, opacity: 1 });
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 0.15), mat);
+      mesh.position.copy(position);
+      scene.add(mesh);
+      const vel = new THREE.Vector3((Math.random() - 0.5) * 6, (Math.random() - 0.5) * 6, (Math.random() - 0.5) * 6);
+      parts.push({ mesh, vel });
+    }
+    explosions.push({ parts, life: 0.6 });
+    const pan = THREE.MathUtils.clamp((position.x - player.x) / 10, -1, 1);
+    playExplosion(pan);
+  }
+
   function damagePlayer(amount, reason) {
     player.hp = Math.max(0, player.hp - amount);
     updateHud();
-    if (player.hp <= 0) endGame(false, reason);
+    if (player.hp <= 0) {
+      explode(player.mesh.position.clone(), 0xff3333);
+      endGame(false, reason);
+    }
   }
   function addScore(amount) { player.score += amount; updateHud(); }
 
@@ -209,6 +340,7 @@
     return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
   }
   joyZone.addEventListener("touchstart", (e) => {
+    ensureAudio();
     const t = e.changedTouches[0];
     joy.active = true; joy.id = t.identifier;
     stick.style.left = (t.clientX - 35) + "px";
@@ -239,11 +371,12 @@
 
   let firing = false;
   const fireZone = document.getElementById("fireZone");
-  fireZone.addEventListener("touchstart", (e) => { firing = true; e.preventDefault(); }, { passive: false });
+  fireZone.addEventListener("touchstart", (e) => { ensureAudio(); firing = true; e.preventDefault(); }, { passive: false });
   fireZone.addEventListener("touchend", () => { firing = false; });
   fireZone.addEventListener("touchcancel", () => { firing = false; });
   // Desktop fallback for testing outside a touch device.
   window.addEventListener("keydown", (e) => {
+    ensureAudio();
     if (e.key === " ") firing = true;
     if (e.key === "ArrowLeft") joy.dx = -1;
     if (e.key === "ArrowRight") joy.dx = 1;
@@ -257,19 +390,39 @@
   });
 
   // ---------- Stage machine ----------
-  const gameState = { stage: 1, phase: "playing", wave: 0, waveTimer: 0, transitionTimer: 0 };
-  const WAVES_PER_STAGE = { 1: 5, 2: 5, 3: 1 }; // stage 3's "wave" is the boss
+  const gameState = { stage: 1, phase: "playing", wave: 0, waveTimer: 0 };
+  const WAVES_PER_STAGE = { 1: 4, 2: 5, 3: 5, 4: 0 }; // stage 4's enemies are the pre-placed tanks, not timed waves
+  const GROUND_THEMES = {
+    1: {
+      fog: 0x3a1010, bg: 0x2a0d0d, ground: 0x241010, ambient: 0xff9977,
+      label: "STAGE 1 · BETRAYAL", banner: "HOLD THE RIDGE — SOMETHING'S WRONG",
+      bossName: "BREACH COMMANDER", bossColor: 0x8a1a1a
+    },
+    2: {
+      fog: 0x0b1030, bg: 0x0b1030, ground: 0x15213d, ambient: 0x8899cc,
+      label: "STAGE 2 · GROUND DEFENSE", banner: "GROUND DEFENSE — HOLD THE LINE",
+      bossName: "SIEGE WALKER", bossColor: 0x5a4a2a
+    }
+  };
+  let betrayalRevealed = false;
+  let triggeredAmbushes = new Set();
+  let bossSpawnedThisStage = false;
+  let wingman = null;
 
   let ground = null;
-  function buildGroundStage() {
+  function buildGroundStage(stageNum) {
+    const theme = GROUND_THEMES[stageNum];
     scene.children.length = 0;
-    scene.add(new THREE.AmbientLight(0x8899cc, 0.7));
+    scene.add(new THREE.AmbientLight(theme.ambient, 0.7));
+    sun = new THREE.DirectionalLight(0xffffff, 0.9);
+    sun.position.set(20, 40, 10);
     scene.add(sun);
-    scene.fog = new THREE.Fog(0x0b1030, 15, 90);
+    scene.fog = new THREE.Fog(theme.fog, 15, 90);
+    scene.background = new THREE.Color(theme.bg);
 
     ground = new THREE.Mesh(
       new THREE.PlaneGeometry(60, 200),
-      new THREE.MeshStandardMaterial({ color: 0x15213d })
+      new THREE.MeshStandardMaterial({ color: theme.ground })
     );
     ground.rotation.x = -Math.PI / 2;
     scene.add(ground);
@@ -285,6 +438,8 @@
   function buildFlightStage() {
     scene.children.length = 0;
     scene.add(new THREE.AmbientLight(0xaabbff, 0.8));
+    sun = new THREE.DirectionalLight(0xffffff, 0.9);
+    sun.position.set(20, 40, 10);
     scene.add(sun);
     scene.fog = new THREE.Fog(0x1a2550, 20, 140);
     scene.background = new THREE.Color(0x1a2550);
@@ -295,11 +450,12 @@
     scene.add(player.mesh);
   }
 
-  let baseTarget = null;
   let boss = null;
   function buildBaseAssaultStage() {
     scene.children.length = 0;
     scene.add(new THREE.AmbientLight(0xffaa88, 0.75));
+    sun = new THREE.DirectionalLight(0xffffff, 0.9);
+    sun.position.set(20, 40, 10);
     scene.add(sun);
     scene.fog = new THREE.Fog(0x331a1a, 20, 150);
     scene.background = new THREE.Color(0x331a1a);
@@ -309,37 +465,54 @@
     player.mesh.visible = false; // first-person: cockpit view, own plane not rendered
     scene.add(player.mesh);
 
-    // Tanks/forts scattered below — visible, shootable targets while flying over.
+    // Tanks/forts scattered below — visible, shootable targets while flying
+    // over. Half are armored: the default gun just clangs off them, only
+    // the missile actually damages them.
     for (let i = 0; i < 6; i++) {
-      const tank = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.9, 2), new THREE.MeshStandardMaterial({ color: 0x5a4a2a }));
+      const armored = i % 2 === 1;
+      const tank = new THREE.Mesh(
+        new THREE.BoxGeometry(1.4, 0.9, 2),
+        new THREE.MeshStandardMaterial({ color: armored ? 0x333333 : 0x5a4a2a })
+      );
       tank.position.set((Math.random() - 0.5) * 16, -6, -20 - i * 14);
       scene.add(tank);
-      enemies.push({ mesh: tank, kind: "tank", hp: 20, vel: new THREE.Vector3(0, 0, 0.04), scoreValue: 150 });
+      enemies.push({ mesh: tank, kind: "tank", armored, hp: armored ? 30 : 20, vel: new THREE.Vector3(0, 0, 0.04), scoreValue: armored ? 220 : 150 });
     }
+  }
 
-    boss = null; // spawned once tanks are cleared
+  function removeWingman() { if (wingman) { scene.remove(wingman.mesh); wingman = null; } }
+  function spawnWingman() {
+    const mesh = makePlaneMesh();
+    mesh.traverse((o) => { if (o.isMesh && o.material && o.material.color) o.material.color.setHex(0x55ffaa); });
+    mesh.scale.set(0.8, 0.8, 0.8);
+    scene.add(mesh);
+    wingman = { mesh, fireCooldown: 1.0 };
   }
 
   function enterStage(stage) {
     gameState.stage = stage;
     gameState.wave = 0;
     gameState.phase = "playing";
-    enemies.length = 0; bullets.length = 0;
+    gameState.waveTimer = 0;
+    bossSpawnedThisStage = false;
+    betrayalRevealed = false;
+    triggeredAmbushes = new Set();
+    boss = null;
+    enemies.length = 0; bullets.length = 0; explosions.length = 0;
+    removeWingman();
     player.hp = player.maxHp;
     player.fuel = player.maxFuel;
-    fuelBarWrap.style.display = stage === 1 ? "none" : "block";
+    fuelBarWrap.style.display = (stage === 3 || stage === 4) ? "block" : "none";
     updateHud();
-    if (stage === 1) { buildGroundStage(); stageLabel.textContent = "STAGE 1 · GROUND DEFENSE"; showBanner("GROUND DEFENSE — HOLD THE LINE"); }
-    if (stage === 2) { buildFlightStage(); stageLabel.textContent = "STAGE 2 · FLIGHT COMBAT"; showBanner("WHEELS UP — WATCH YOUR SIX"); }
-    if (stage === 3) { buildBaseAssaultStage(); stageLabel.textContent = "STAGE 3 · BASE ASSAULT"; showBanner("FINAL APPROACH — BASE ASSAULT"); }
+    if (stage === 1) { buildGroundStage(1); stageLabel.textContent = GROUND_THEMES[1].label; showBanner(GROUND_THEMES[1].banner); }
+    if (stage === 2) { buildGroundStage(2); stageLabel.textContent = GROUND_THEMES[2].label; showBanner(GROUND_THEMES[2].banner); }
+    if (stage === 3) { buildFlightStage(); stageLabel.textContent = "STAGE 3 · FLIGHT COMBAT"; showBanner("WHEELS UP — WATCH YOUR SIX"); spawnWingman(); }
+    if (stage === 4) { buildBaseAssaultStage(); stageLabel.textContent = "STAGE 4 · BASE ASSAULT"; showBanner("FINAL APPROACH — BASE ASSAULT"); spawnWingman(); }
   }
 
   function advanceStage() {
-    if (gameState.stage < 3) {
-      enterStage(gameState.stage + 1);
-    } else {
-      endGame(true);
-    }
+    if (gameState.stage < 4) enterStage(gameState.stage + 1);
+    else endGame(true);
   }
 
   // ---------- Enemy spawning per stage ----------
@@ -361,32 +534,67 @@
   }
 
   // Most fighters approach head-on (ahead, negative Z, closing in) — but a
-  // fraction jump you from behind (positive Z, past the camera, closing
-  // in the opposite direction) so a player who only ever watches the
-  // front gets bitten. fromBehind enemies trigger the rear-warning HUD.
-  function spawnFlightEnemy(fromBehind) {
-    const mesh = new THREE.Mesh(new THREE.ConeGeometry(0.45, 1.3, 6), new THREE.MeshStandardMaterial({ color: fromBehind ? 0xff3dd2 : 0xff7a3d }));
+  // fraction jump you from behind (positive Z, past the camera, closing in
+  // the opposite direction) so a player who only ever watches the front
+  // gets bitten. fromBehind enemies trigger the rear-warning HUD + sound.
+  // offsetX/offsetY let a squadron spawn several of these in formation
+  // instead of each one rolling its own independent random position.
+  function spawnFlightEnemy(fromBehind, offsetX, offsetY, squad) {
+    offsetX = offsetX || 0; offsetY = offsetY || 0;
+    const color = fromBehind ? (squad ? 0xff8ae0 : 0xff3dd2) : (squad ? 0xffaa77 : 0xff7a3d);
+    const mesh = new THREE.Mesh(new THREE.ConeGeometry(0.45, 1.3, 6), new THREE.MeshStandardMaterial({ color }));
     mesh.rotation.x = fromBehind ? -Math.PI / 2 : Math.PI / 2;
-    const y = (Math.random() - 0.5) * 6;
+    const baseX = squad ? offsetX : (Math.random() - 0.5) * 14;
+    const baseY = squad ? offsetY : (Math.random() - 0.5) * 6;
     if (fromBehind) {
-      mesh.position.set((Math.random() - 0.5) * 14, y, 40 + Math.random() * 15);
+      mesh.position.set(baseX, baseY, 40 + Math.random() * 15);
       scene.add(mesh);
-      enemies.push({ mesh, kind: "fighter", fromBehind: true, hp: 3, vel: new THREE.Vector3(0, 0, -0.16), scoreValue: 50 });
+      enemies.push({ mesh, kind: "fighter", fromBehind: true, squad: !!squad, hp: 3, vel: new THREE.Vector3(0, 0, -0.16), scoreValue: 50 });
     } else {
-      mesh.position.set((Math.random() - 0.5) * 14, y, -60 - Math.random() * 20);
+      mesh.position.set(baseX, baseY, -60 - Math.random() * 20);
       scene.add(mesh);
-      enemies.push({ mesh, kind: "fighter", fromBehind: false, hp: 3, vel: new THREE.Vector3(0, 0, 0.14), scoreValue: 40 });
+      enemies.push({ mesh, kind: "fighter", fromBehind: false, squad: !!squad, hp: 3, vel: new THREE.Vector3(0, 0, 0.14), scoreValue: 40 });
     }
   }
 
-  function spawnBoss() {
+  // Enemies "team up" — a squadron of 2-3 fighters spawns together in a
+  // line formation and closes in together, rather than always one at a time.
+  function spawnFlightSquadron(fromBehind) {
+    const count = 2 + (Math.random() < 0.4 ? 1 : 0);
+    const baseY = (Math.random() - 0.5) * 6;
+    for (let k = 0; k < count; k++) {
+      spawnFlightEnemy(fromBehind, (k - (count - 1) / 2) * 2.2, baseY, true);
+    }
+  }
+
+  function spawnBoss(stageNum) {
     const mesh = new THREE.Group();
-    const core = new THREE.Mesh(new THREE.BoxGeometry(3, 1.4, 5), new THREE.MeshStandardMaterial({ color: 0x8a1a1a }));
-    mesh.add(core);
-    mesh.position.set(0, 1, -50);
+    let hp, scoreVal, name, mode, pos;
+    if (stageNum === 1) {
+      mesh.add(new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.6, 2.6), new THREE.MeshStandardMaterial({ color: GROUND_THEMES[1].bossColor })));
+      pos = new THREE.Vector3(0, 1.2, -3); hp = 50; scoreVal = 400; name = GROUND_THEMES[1].bossName; mode = "ground";
+    } else if (stageNum === 2) {
+      mesh.add(new THREE.Mesh(new THREE.BoxGeometry(2.6, 1.8, 3), new THREE.MeshStandardMaterial({ color: GROUND_THEMES[2].bossColor })));
+      pos = new THREE.Vector3(0, 1.2, -3); hp = 55; scoreVal = 450; name = GROUND_THEMES[2].bossName; mode = "ground";
+    } else if (stageNum === 3) {
+      mesh.add(new THREE.Mesh(new THREE.ConeGeometry(0.8, 2.4, 6), new THREE.MeshStandardMaterial({ color: 0xaa2a88 })));
+      pos = new THREE.Vector3(0, 0, -50); hp = 45; scoreVal = 480; name = "INTERCEPTOR ACE"; mode = "flight";
+    } else {
+      mesh.add(new THREE.Mesh(new THREE.BoxGeometry(3, 1.4, 5), new THREE.MeshStandardMaterial({ color: 0x8a1a1a })));
+      pos = new THREE.Vector3(0, 1, -50); hp = 60; scoreVal = 600; name = "WARBIRD PRIME"; mode = "flight";
+    }
+    mesh.position.copy(pos);
     scene.add(mesh);
-    boss = { mesh, hp: 60, maxHp: 60, vel: new THREE.Vector3(0.03, 0, 0), t: 0 };
-    showBanner("ENEMY BOSS PLANE INBOUND", 2000);
+    boss = { mesh, hp, maxHp: hp, t: 0, mode, scoreVal, name };
+    showBanner(name + " INBOUND", 2200);
+  }
+
+  function killBoss() {
+    addScore(boss.scoreVal);
+    explode(boss.mesh.position.clone(), 0xffaa33);
+    scene.remove(boss.mesh);
+    boss = null;
+    advanceStage();
   }
 
   // ---------- Main loop ----------
@@ -400,9 +608,11 @@
 
     const pilot = activePilot();
     const moveSpeed = 7 * pilot.speed * dt;
+    const onGround = gameState.stage === 1 || gameState.stage === 2;
+    const inFlight = gameState.stage === 3 || gameState.stage === 4;
 
     // --- Player movement, per stage ---
-    if (gameState.stage === 1) {
+    if (onGround) {
       player.x = THREE.MathUtils.clamp(player.x + joy.dx * moveSpeed, -8, 8);
       player.z = THREE.MathUtils.clamp(player.z - joy.dy * moveSpeed, -6, 4);
       player.mesh.position.set(player.x, player.y, player.z);
@@ -429,11 +639,12 @@
     // --- Firing ---
     player.fireCooldown -= dt;
     if (firing && player.fireCooldown <= 0) {
-      player.fireCooldown = 0.18 * pilot.fireRate;
+      const wpn = activeWeapon();
+      player.fireCooldown = wpn.cooldown * pilot.fireRate;
       const origin = player.mesh.position.clone();
-      origin.y += gameState.stage === 1 ? 1 : 0;
-      const dir = gameState.stage === 1 ? new THREE.Vector3(0, 0, -1) : new THREE.Vector3(0, 0, -1);
-      spawnBullet(origin, dir, 36);
+      origin.y += onGround ? 1 : 0;
+      spawnBullet(origin, new THREE.Vector3(0, 0, -1), wpn);
+      playShoot(wpn.key);
     }
 
     // --- Bullets ---
@@ -446,21 +657,35 @@
 
     // --- Enemy spawning cadence ---
     gameState.waveTimer -= dt;
-    if (gameState.stage === 1 && gameState.wave < WAVES_PER_STAGE[1]) {
+    if (onGround && gameState.wave < WAVES_PER_STAGE[gameState.stage]) {
       if (gameState.waveTimer <= 0) {
-        gameState.waveTimer = 0.9;
+        gameState.waveTimer = 0.85;
         spawnGroundEnemy();
       }
-    } else if (gameState.stage === 2 && gameState.wave < WAVES_PER_STAGE[2]) {
+      if (gameState.stage === 1 && !betrayalRevealed && gameState.wave >= 2) {
+        betrayalRevealed = true;
+        showBanner("COMMS INTERCEPT: KANE SOLD OUR COORDINATES", 2600);
+      }
+    } else if (gameState.stage === 3 && gameState.wave < WAVES_PER_STAGE[3]) {
       if (gameState.waveTimer <= 0) {
-        gameState.waveTimer = 1.1;
-        spawnFlightEnemy(Math.random() < 0.3); // ~30% jump you from behind
+        gameState.waveTimer = 1.0;
+        const fromBehind = Math.random() < 0.4; // intensified rear-attack chance
+        if (Math.random() < 0.35) spawnFlightSquadron(fromBehind);
+        else spawnFlightEnemy(fromBehind);
+      }
+      // Guaranteed rear-ambush spikes at set checkpoints, on top of the
+      // random chance above — makes sure rear attacks actually recur
+      // several times per stage instead of only maybe happening.
+      if ((gameState.wave === 2 || gameState.wave === 4) && !triggeredAmbushes.has(gameState.wave)) {
+        triggeredAmbushes.add(gameState.wave);
+        spawnFlightSquadron(true);
+        showBanner("INCOMING — THEY'RE ON YOUR SIX", 1400);
       }
     }
 
     // --- Fuel (flight stages only) — running out ends the run, same
     // severity as getting shot down, with its own message. ---
-    if (gameState.stage !== 1) {
+    if (inFlight) {
       player.fuel = Math.max(0, player.fuel - dt * 2.4);
       if (player.fuel <= 0) {
         updateHud();
@@ -471,15 +696,51 @@
     }
 
     // --- Rear-attack warning: lit whenever a fromBehind enemy is closing
-    // in but hasn't passed the player yet. ---
+    // in but hasn't passed the player yet. Fires the directional alert
+    // sound once on the rising edge (not every frame), panned toward
+    // whichever side the threat is actually on. ---
     let rearThreatNear = false;
+    let rearThreatX = 0;
     for (const en of enemies) {
       if (en.fromBehind && en.mesh.position.z - player.mesh.position.z < 18 && en.mesh.position.z - player.mesh.position.z > -2) {
         rearThreatNear = true;
+        rearThreatX = en.mesh.position.x;
         break;
       }
     }
-    rearWarningEl.classList.toggle("show", rearThreatNear && gameState.stage !== 1);
+    const rearShowing = rearThreatNear && inFlight;
+    if (rearShowing && !rearWarningEl.classList.contains("show")) {
+      playRearAlert((rearThreatX - player.x) / 10);
+    }
+    rearWarningEl.classList.toggle("show", rearShowing);
+
+    // --- Wingman (flight stages only): follows the player loosely and
+    // periodically weakens/kills the nearest enemy ahead — a scripted
+    // helper, not real AI, confirming the "team up in some missions" ask
+    // without pretending there's a second controllable plane. ---
+    if (wingman && inFlight) {
+      wingman.mesh.position.set(player.x - 3.2, player.y - 0.6, player.mesh.position.z + 1.5);
+      wingman.fireCooldown -= dt;
+      if (wingman.fireCooldown <= 0) {
+        wingman.fireCooldown = 1.6;
+        let target = null, bestDist = 30;
+        for (const en of enemies) {
+          if (en.kind !== "fighter" && en.kind !== "tank") continue;
+          const d = en.mesh.position.distanceTo(wingman.mesh.position);
+          if (d < bestDist) { bestDist = d; target = en; }
+        }
+        if (target && !(target.armored)) {
+          target.hp -= 2;
+          playShoot("gun");
+          if (target.hp <= 0) {
+            addScore(Math.floor(target.scoreValue * 0.5));
+            explode(target.mesh.position.clone(), 0xffaa33);
+            const idx = enemies.indexOf(target);
+            if (idx >= 0) removeEnemy(idx);
+          }
+        }
+      }
+    }
 
     // --- Enemy movement + collision with player / bullets ---
     for (let i = enemies.length - 1; i >= 0; i--) {
@@ -493,9 +754,10 @@
       // as a mid-air collision — mutual destruction, both planes go down.
       if (en.kind === "fighter" && en.mesh.position.distanceTo(player.mesh.position) < 1.4) {
         addScore(Math.floor(en.scoreValue / 2)); // half credit — a ram isn't a clean kill
+        explode(en.mesh.position.clone(), 0xffaa33);
         damagePlayer(45, "Mid-Air Collision");
         removeEnemy(i);
-        if (gameState.stage === 1 || gameState.stage === 2) gameState.wave++;
+        if (onGround || gameState.stage === 3) gameState.wave++;
         continue;
       }
 
@@ -510,12 +772,12 @@
       // were dodged rather than shot).
       if (!en.fromBehind && dz < -40) {
         removeEnemy(i);
-        if (gameState.stage === 2) gameState.wave++; // dodged clean — still counts as cleared
+        if (gameState.stage === 3) gameState.wave++; // dodged clean — still counts as cleared
         continue;
       }
 
       // Reached/passed the player plane (head-on, un-dodged) -> damage + despawn.
-      if ((gameState.stage === 1 && dz > 3) || (gameState.stage !== 1 && !en.fromBehind && dz > 4)) {
+      if ((onGround && dz > 3) || (inFlight && !en.fromBehind && dz > 4)) {
         damagePlayer(en.kind === "mine" ? 18 : 10, "Shot Down");
         removeEnemy(i);
         continue;
@@ -524,61 +786,76 @@
       // Bullet collision (simple distance check — deliberately not physics-accurate).
       for (let j = bullets.length - 1; j >= 0; j--) {
         if (bullets[j].mesh.position.distanceTo(en.mesh.position) < 1.1) {
+          const penetrates = !(en.armored) || bullets[j].weaponKey === "missile";
           removeBullet(j);
-          en.hp -= 1;
+          if (!penetrates) break; // armor absorbed the hit — no damage, no kill
+          en.hp -= bullets[j].damage;
           if (en.hp <= 0) {
             addScore(en.scoreValue);
+            explode(en.mesh.position.clone(), en.kind === "tank" ? 0x8a6a3a : 0xffaa33);
             removeEnemy(i);
-            if (gameState.stage === 1 || gameState.stage === 2) gameState.wave++;
+            if (onGround || gameState.stage === 3) gameState.wave++;
           }
           break;
         }
       }
     }
 
-    // --- Boss (stage 3 only, after tanks cleared) ---
-    if (gameState.stage === 3) {
-      if (!boss && enemies.length === 0 && gameState.wave === 0) {
-        gameState.wave = 1;
-        spawnBoss();
+    // --- Boss, once each stage's regular enemies are cleared ---
+    if (!boss && !bossSpawnedThisStage) {
+      const wavesNeeded = WAVES_PER_STAGE[gameState.stage];
+      const wavesDone = wavesNeeded === 0 ? true : gameState.wave >= wavesNeeded;
+      if (wavesDone && enemies.length === 0) {
+        bossSpawnedThisStage = true;
+        spawnBoss(gameState.stage);
       }
-      if (boss) {
-        boss.t += dt;
+    }
+    if (boss) {
+      boss.t += dt;
+      if (boss.mode === "ground") {
+        boss.mesh.position.x = Math.sin(boss.t * 0.5) * 5;
+      } else {
         boss.mesh.position.x = Math.sin(boss.t * 0.6) * 6;
         boss.mesh.position.z = -45 + Math.sin(boss.t * 0.3) * 6;
-        if (Math.random() < 0.01) damagePlayer(6, "Shot Down"); // occasional return fire
-        // Ramming the boss head-on is a real option too, at a real cost —
-        // it deals heavy damage to both rather than instantly winning.
-        if (player.mesh.position.distanceTo(boss.mesh.position) < 2.6) {
-          damagePlayer(60, "Mid-Air Collision");
-          boss.hp -= 20;
-          if (boss.hp <= 0) {
-            addScore(500);
-            scene.remove(boss.mesh);
-            boss = null;
-            gameState.wave = 2;
-            advanceStage();
-          }
-        }
+      }
+      if (Math.random() < 0.01) damagePlayer(6, "Shot Down"); // occasional return fire
+
+      const dist = boss.mode === "ground"
+        ? Math.hypot(boss.mesh.position.x - player.x, boss.mesh.position.z - player.z)
+        : player.mesh.position.distanceTo(boss.mesh.position);
+      const ramRange = boss.mode === "ground" ? 2.2 : 2.6;
+      // Ramming the boss head-on is a real option too, at a real cost —
+      // it deals heavy damage to both rather than instantly winning.
+      if (dist < ramRange) {
+        explode(boss.mesh.position.clone(), 0xff8833);
+        damagePlayer(60, "Mid-Air Collision");
+        boss.hp -= 20;
+        if (boss.hp <= 0) { killBoss(); }
+      }
+      if (boss) {
+        const hitRange = boss.mode === "ground" ? 2.0 : 2.4;
         for (let j = bullets.length - 1; j >= 0; j--) {
-          if (bullets[j].mesh.position.distanceTo(boss.mesh.position) < 2.4) {
+          if (bullets[j].mesh.position.distanceTo(boss.mesh.position) < hitRange) {
+            boss.hp -= bullets[j].damage;
             removeBullet(j);
-            boss.hp -= 1;
-            if (boss.hp <= 0) {
-              addScore(500);
-              scene.remove(boss.mesh);
-              boss = null;
-              gameState.wave = 2;
-              advanceStage();
-            }
+            if (boss.hp <= 0) { killBoss(); break; }
           }
         }
       }
     }
 
-    // --- Stage clear check ---
-    if (gameState.stage !== 3 && gameState.wave >= WAVES_PER_STAGE[gameState.stage] && enemies.length === 0) {
-      advanceStage();
+    // --- Explosions (fragment bursts) ---
+    for (let i = explosions.length - 1; i >= 0; i--) {
+      const ex = explosions[i];
+      ex.life -= dt;
+      for (const p of ex.parts) {
+        p.mesh.position.addScaledVector(p.vel, dt);
+        p.mesh.material.opacity = Math.max(0, ex.life / 0.6);
+      }
+      if (ex.life <= 0) {
+        for (const p of ex.parts) scene.remove(p.mesh);
+        explosions.splice(i, 1);
+      }
     }
 
     renderer.render(scene, camera);
