@@ -9,10 +9,14 @@
   canvas { display: block; }
   #hud { position: fixed; top: 0; left: 0; right: 0; padding: 10px 14px; color: #fff; display: flex; justify-content: space-between; align-items: flex-start; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,0.8); z-index: 10; }
   #hud .stat { font-size: 13px; font-weight: 600; letter-spacing: 0.03em; }
-  #hpBarWrap { width: 140px; height: 10px; background: rgba(255,255,255,0.25); border-radius: 5px; overflow: hidden; margin-top: 4px; }
+  #hpBarWrap, #fuelBarWrap { width: 140px; height: 10px; background: rgba(255,255,255,0.25); border-radius: 5px; overflow: hidden; margin-top: 4px; }
   #hpBar { height: 100%; width: 100%; background: #3ddc6a; transition: width 0.15s; }
+  #fuelBar { height: 100%; width: 100%; background: #3dc4ff; transition: width 0.15s; }
   #pilotBtn { pointer-events: auto; background: rgba(0,0,0,0.5); color: #fff; border: 1px solid rgba(255,255,255,0.4); border-radius: 8px; padding: 6px 10px; font-size: 12px; font-weight: 700; }
   #stageBanner { position: fixed; top: 40%; left: 0; right: 0; text-align: center; color: #fff; font-size: 26px; font-weight: 800; text-shadow: 0 2px 8px rgba(0,0,0,0.9); letter-spacing: 0.04em; z-index: 10; pointer-events: none; opacity: 0; transition: opacity 0.4s; }
+  #rearWarning { position: fixed; top: 46%; left: 0; right: 0; text-align: center; color: #ff4d4d; font-size: 15px; font-weight: 800; letter-spacing: 0.08em; text-shadow: 0 2px 6px rgba(0,0,0,0.9); z-index: 10; pointer-events: none; opacity: 0; transition: opacity 0.2s; animation: none; }
+  #rearWarning.show { opacity: 1; animation: rearPulse 0.6s infinite; }
+  @keyframes rearPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
   #joystick, #fireZone { position: fixed; bottom: 0; width: 50%; height: 42%; z-index: 9; }
   #joystick { left: 0; }
   #fireZone { right: 0; }
@@ -30,10 +34,12 @@
     <div class="stat" id="stageLabel">STAGE 1 · GROUND DEFENSE</div>
     <div class="stat">SCORE <span id="score">0</span></div>
     <div id="hpBarWrap"><div id="hpBar"></div></div>
+    <div id="fuelBarWrap" style="display:none;"><div id="fuelBar"></div></div>
   </div>
   <button id="pilotBtn">PILOT: ACE</button>
 </div>
 <div id="stageBanner"></div>
+<div id="rearWarning">⚠ ENEMY BEHIND YOU — EVADE</div>
 <div id="joystick"><div id="stick"><div id="stickKnob"></div></div></div>
 <div id="fireZone"></div>
 <div id="endScreen">
@@ -103,6 +109,8 @@
   const player = {
     hp: 100,
     maxHp: 100,
+    fuel: 100,
+    maxFuel: 100,
     score: 0,
     x: 0, y: 0, z: 0,
     fireCooldown: 0,
@@ -149,20 +157,25 @@
   function removeBullet(i) { scene.remove(bullets[i].mesh); bullets.splice(i, 1); }
   function removeEnemy(i) { scene.remove(enemies[i].mesh); enemies.splice(i, 1); }
 
-  function damagePlayer(amount) {
+  function damagePlayer(amount, reason) {
     player.hp = Math.max(0, player.hp - amount);
     updateHud();
-    if (player.hp <= 0) endGame(false);
+    if (player.hp <= 0) endGame(false, reason);
   }
   function addScore(amount) { player.score += amount; updateHud(); }
 
   // ---------- HUD ----------
   const hpBar = document.getElementById("hpBar");
+  const fuelBar = document.getElementById("fuelBar");
+  const fuelBarWrap = document.getElementById("fuelBarWrap");
   const scoreEl = document.getElementById("score");
   const stageLabel = document.getElementById("stageLabel");
+  const rearWarningEl = document.getElementById("rearWarning");
   function updateHud() {
     hpBar.style.width = Math.max(0, (player.hp / player.maxHp) * 100) + "%";
     hpBar.style.background = player.hp > 50 ? "#3ddc6a" : player.hp > 20 ? "#ffb13d" : "#ff4d4d";
+    fuelBar.style.width = Math.max(0, (player.fuel / player.maxFuel) * 100) + "%";
+    fuelBar.style.background = player.fuel > 30 ? "#3dc4ff" : "#ff4d4d";
     scoreEl.textContent = player.score;
   }
   updateHud();
@@ -175,10 +188,10 @@
     b._t = setTimeout(() => { b.style.opacity = "0"; }, ms || 1600);
   }
 
-  function endGame(won) {
+  function endGame(won, reason) {
     gameState.phase = "ended";
     const el = document.getElementById("endScreen");
-    document.getElementById("endTitle").textContent = won ? "Base Destroyed" : "Shot Down";
+    document.getElementById("endTitle").textContent = won ? "Base Destroyed" : (reason || "Shot Down");
     document.getElementById("endSubtitle").textContent = won
       ? "Final score: " + player.score
       : "Final score: " + player.score + " — tap to try again.";
@@ -278,9 +291,8 @@
 
     player.x = 0; player.y = 0; player.z = 0;
     player.mesh = makePlaneMesh();
+    player.mesh.visible = false; // first-person: cockpit view, own plane not rendered
     scene.add(player.mesh);
-
-    camera.position.set(0, 2.2, 6);
   }
 
   let baseTarget = null;
@@ -294,9 +306,8 @@
 
     player.x = 0; player.y = 0; player.z = 0;
     player.mesh = makePlaneMesh();
+    player.mesh.visible = false; // first-person: cockpit view, own plane not rendered
     scene.add(player.mesh);
-
-    camera.position.set(0, 2.2, 6);
 
     // Tanks/forts scattered below — visible, shootable targets while flying over.
     for (let i = 0; i < 6; i++) {
@@ -315,9 +326,11 @@
     gameState.phase = "playing";
     enemies.length = 0; bullets.length = 0;
     player.hp = player.maxHp;
+    player.fuel = player.maxFuel;
+    fuelBarWrap.style.display = stage === 1 ? "none" : "block";
     updateHud();
     if (stage === 1) { buildGroundStage(); stageLabel.textContent = "STAGE 1 · GROUND DEFENSE"; showBanner("GROUND DEFENSE — HOLD THE LINE"); }
-    if (stage === 2) { buildFlightStage(); stageLabel.textContent = "STAGE 2 · FLIGHT COMBAT"; showBanner("WHEELS UP — FLIGHT COMBAT"); }
+    if (stage === 2) { buildFlightStage(); stageLabel.textContent = "STAGE 2 · FLIGHT COMBAT"; showBanner("WHEELS UP — WATCH YOUR SIX"); }
     if (stage === 3) { buildBaseAssaultStage(); stageLabel.textContent = "STAGE 3 · BASE ASSAULT"; showBanner("FINAL APPROACH — BASE ASSAULT"); }
   }
 
@@ -347,12 +360,23 @@
     });
   }
 
-  function spawnFlightEnemy() {
-    const mesh = new THREE.Mesh(new THREE.ConeGeometry(0.45, 1.3, 6), new THREE.MeshStandardMaterial({ color: 0xff7a3d }));
-    mesh.rotation.x = Math.PI / 2;
-    mesh.position.set((Math.random() - 0.5) * 14, (Math.random() - 0.5) * 6, -60 - Math.random() * 20);
-    scene.add(mesh);
-    enemies.push({ mesh, kind: "fighter", hp: 3, vel: new THREE.Vector3(0, 0, 0.14), scoreValue: 40 });
+  // Most fighters approach head-on (ahead, negative Z, closing in) — but a
+  // fraction jump you from behind (positive Z, past the camera, closing
+  // in the opposite direction) so a player who only ever watches the
+  // front gets bitten. fromBehind enemies trigger the rear-warning HUD.
+  function spawnFlightEnemy(fromBehind) {
+    const mesh = new THREE.Mesh(new THREE.ConeGeometry(0.45, 1.3, 6), new THREE.MeshStandardMaterial({ color: fromBehind ? 0xff3dd2 : 0xff7a3d }));
+    mesh.rotation.x = fromBehind ? -Math.PI / 2 : Math.PI / 2;
+    const y = (Math.random() - 0.5) * 6;
+    if (fromBehind) {
+      mesh.position.set((Math.random() - 0.5) * 14, y, 40 + Math.random() * 15);
+      scene.add(mesh);
+      enemies.push({ mesh, kind: "fighter", fromBehind: true, hp: 3, vel: new THREE.Vector3(0, 0, -0.16), scoreValue: 50 });
+    } else {
+      mesh.position.set((Math.random() - 0.5) * 14, y, -60 - Math.random() * 20);
+      scene.add(mesh);
+      enemies.push({ mesh, kind: "fighter", fromBehind: false, hp: 3, vel: new THREE.Vector3(0, 0, 0.14), scoreValue: 40 });
+    }
   }
 
   function spawnBoss() {
@@ -385,13 +409,21 @@
       camera.position.set(player.x * 0.3, 4.2, player.z + 7);
       camera.lookAt(player.x, 1, player.z - 10);
     } else {
+      // Full up/down + left/right maneuvering — this is the dodge axis for
+      // both head-on and rear attacks, since there's no turn-to-face-behind
+      // mechanic; evading an enemy on your six means moving off its line,
+      // not spinning the camera around.
       player.x = THREE.MathUtils.clamp(player.x + joy.dx * moveSpeed * 1.3, -10, 10);
       player.y = THREE.MathUtils.clamp(player.y - joy.dy * moveSpeed * 1.3, -6, 6);
       player.mesh.position.set(player.x, player.y, 0);
       player.mesh.rotation.z = -joy.dx * 0.6;
       player.mesh.rotation.x = Math.PI / -2 + joy.dy * 0.3;
-      camera.position.set(player.x * 0.5, player.y * 0.5 + 2, 6);
-      camera.lookAt(player.x * 0.5, player.y * 0.5, -20);
+      // First-person cockpit camera: sits at the (invisible) plane's
+      // position; look-ahead point shifts slightly with stick input so
+      // steering actually changes what you're looking at, not just where
+      // the ship is.
+      camera.position.set(player.x, player.y, 0);
+      camera.lookAt(player.x + joy.dx * 6, player.y - joy.dy * 6, -30);
     }
 
     // --- Firing ---
@@ -422,20 +454,69 @@
     } else if (gameState.stage === 2 && gameState.wave < WAVES_PER_STAGE[2]) {
       if (gameState.waveTimer <= 0) {
         gameState.waveTimer = 1.1;
-        spawnFlightEnemy();
+        spawnFlightEnemy(Math.random() < 0.3); // ~30% jump you from behind
       }
     }
+
+    // --- Fuel (flight stages only) — running out ends the run, same
+    // severity as getting shot down, with its own message. ---
+    if (gameState.stage !== 1) {
+      player.fuel = Math.max(0, player.fuel - dt * 2.4);
+      if (player.fuel <= 0) {
+        updateHud();
+        endGame(false, "Out of Fuel");
+      } else {
+        updateHud();
+      }
+    }
+
+    // --- Rear-attack warning: lit whenever a fromBehind enemy is closing
+    // in but hasn't passed the player yet. ---
+    let rearThreatNear = false;
+    for (const en of enemies) {
+      if (en.fromBehind && en.mesh.position.z - player.mesh.position.z < 18 && en.mesh.position.z - player.mesh.position.z > -2) {
+        rearThreatNear = true;
+        break;
+      }
+    }
+    rearWarningEl.classList.toggle("show", rearThreatNear && gameState.stage !== 1);
 
     // --- Enemy movement + collision with player / bullets ---
     for (let i = enemies.length - 1; i >= 0; i--) {
       const en = enemies[i];
       en.mesh.position.add(en.vel);
       en.mesh.rotation.y += dt;
-
-      // Reached/passed the player plane -> damage + despawn.
       const dz = en.mesh.position.z - player.mesh.position.z;
-      if ((gameState.stage === 1 && dz > 3) || (gameState.stage !== 1 && dz > 4)) {
-        damagePlayer(en.kind === "mine" ? 18 : 10);
+
+      // Ramming: any fighter (head-on or from behind) that closes to
+      // point-blank range without the player dodging off its line counts
+      // as a mid-air collision — mutual destruction, both planes go down.
+      if (en.kind === "fighter" && en.mesh.position.distanceTo(player.mesh.position) < 1.4) {
+        addScore(Math.floor(en.scoreValue / 2)); // half credit — a ram isn't a clean kill
+        damagePlayer(45, "Mid-Air Collision");
+        removeEnemy(i);
+        if (gameState.stage === 1 || gameState.stage === 2) gameState.wave++;
+        continue;
+      }
+
+      // A fromBehind enemy that slips past without ramming is now ahead of
+      // the player (dz went negative) — it becomes a normal shootable
+      // target the existing forward gun can hit, same as a head-on enemy.
+      if (en.fromBehind && dz < -2) {
+        en.fromBehind = false;
+      }
+      // Far enough ahead that it's no longer relevant — clean up quietly,
+      // no penalty either way (this only happens to ex-rear-attackers that
+      // were dodged rather than shot).
+      if (!en.fromBehind && dz < -40) {
+        removeEnemy(i);
+        if (gameState.stage === 2) gameState.wave++; // dodged clean — still counts as cleared
+        continue;
+      }
+
+      // Reached/passed the player plane (head-on, un-dodged) -> damage + despawn.
+      if ((gameState.stage === 1 && dz > 3) || (gameState.stage !== 1 && !en.fromBehind && dz > 4)) {
+        damagePlayer(en.kind === "mine" ? 18 : 10, "Shot Down");
         removeEnemy(i);
         continue;
       }
@@ -465,7 +546,20 @@
         boss.t += dt;
         boss.mesh.position.x = Math.sin(boss.t * 0.6) * 6;
         boss.mesh.position.z = -45 + Math.sin(boss.t * 0.3) * 6;
-        if (Math.random() < 0.01) damagePlayer(6); // occasional return fire
+        if (Math.random() < 0.01) damagePlayer(6, "Shot Down"); // occasional return fire
+        // Ramming the boss head-on is a real option too, at a real cost —
+        // it deals heavy damage to both rather than instantly winning.
+        if (player.mesh.position.distanceTo(boss.mesh.position) < 2.6) {
+          damagePlayer(60, "Mid-Air Collision");
+          boss.hp -= 20;
+          if (boss.hp <= 0) {
+            addScore(500);
+            scene.remove(boss.mesh);
+            boss = null;
+            gameState.wave = 2;
+            advanceStage();
+          }
+        }
         for (let j = bullets.length - 1; j >= 0; j--) {
           if (bullets[j].mesh.position.distanceTo(boss.mesh.position) < 2.4) {
             removeBullet(j);
