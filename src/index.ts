@@ -40,6 +40,11 @@ import { verifyPurchase } from './services/googlePlayService';
 import socialRoutes from './routes/socialRoutes';
 import webhookRoutes from './routes/webhookRoutes';
 import businessRoutes from './routes/businessRoutes';
+import advertRoutes from './routes/advertRoutes';
+import { Advert } from './models/Advert'; // imported for Sequelize registration — table is created by sequelize.sync below
+import cameraRoutes from './routes/cameraRoutes';
+import { CameraProfile } from './models/CameraProfile'; // imported for Sequelize registration — table is created by sequelize.sync below
+import adsRoutes from './routes/adsRoutes';
 import meetupRoutes, { sweepSilentMeetups } from './routes/meetupRoutes';
 import reviewRoutes from './routes/reviewRoutes';
 import cloudStorageRoutes from './routes/cloudStorageRoutes';
@@ -190,6 +195,12 @@ app.use('/api/emergency', emergencyRoutes);
 app.use('/api/email', emailRoutes);
 app.use('/api/email-account', emailAccountRoutes);
 app.use('/api/business', businessRoutes);
+app.use('/api/adverts', advertRoutes);
+app.use('/api/cameras', cameraRoutes);
+// NOT /api/ads — that path is already taken by the self-promotion ad-serving
+// system (adRoutes.ts, line above). This is the separate real-campaign
+// (Zernio Ads) system; collision would have been silent and ugly to debug.
+app.use('/api/ad-campaigns', adsRoutes);
 app.use('/api/meetups', meetupRoutes);
 app.use('/api/reviews', reviewRoutes);
 app.use('/api/cloud-storage', cloudStorageRoutes);
@@ -367,7 +378,7 @@ app.get('/api/weather', async (req, res) => {
 });
 
 app.get('/api/news', async (req, res) => {
-    const { firebaseUid, fastLoad, refresh } = req.query;
+    const { fastLoad, refresh } = req.query;
 
     if (refresh === 'true') {
         try {
@@ -471,9 +482,12 @@ app.get('/api/discovery/nearby', async (req, res) => {
                 category: b.category,
                 latitude: b.latitude!,
                 longitude: b.longitude!,
-                website: b.website || undefined,
-                contactPhone: b.phone || undefined,
-                contactEmail: b.email || undefined,
+                // Business has no website/phone/email columns — its real
+                // contact mechanism is connectedPlatforms (declared public
+                // @handles, see businessModel.ts). These three referenced
+                // fields never existed on the model, so they always
+                // silently resolved to undefined at runtime — removed
+                // rather than left pretending to read real data.
                 businessId: b.businessId
             }));
     } catch (e: any) {

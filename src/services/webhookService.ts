@@ -7,6 +7,7 @@ import logger from '../utils/logger';
 import { User, SocialEvent, DelayedAction, sequelize } from '../models/userModel';
 import { getAiResponse } from './aiService';
 import { normalizePlatformId, isPlatformMatching, isContactAutoReplyEnabled } from './socialService';
+import { sendPushToDevice } from '../utils/push';
 
 // The event types below are registered with Zernio on startup (see
 // ZernioAdapter.ensureWebhookRegistered in index.ts) — kept in this file so
@@ -268,6 +269,18 @@ export class WebhookService {
         await user.save({ transaction });
 
         logger.info(`💬 [${platform}] Message queued for Shadow AI analysis.`);
+
+        // 🔔 Wake the device via FCM the same way an incoming call already
+        // does — fires regardless of whether Ghost Responder below also
+        // auto-replies, since the owning user should be told about the DM
+        // either way. sendPushToDevice swallows its own errors/dead tokens.
+        await sendPushToDevice(user.deviceId, {
+            type: 'new_dm',
+            platform: platform.toLowerCase(),
+            senderName: sender,
+            preview: (data.content?.text || data.text || "").slice(0, 160),
+            senderId: String(data.sender?.id ?? data.author?.id ?? data.conversationId ?? '')
+        });
 
         // 🛡️ GHOST RESPONDER: Auto-Reply Logic — requires BOTH the global master
         // switch AND this specific contact's minichat to have auto-reply enabled,

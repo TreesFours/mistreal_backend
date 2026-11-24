@@ -57,11 +57,11 @@ router.get('/watchlist', async (_req: Request, res: Response) => {
 
 router.get('/candles', async (req: Request, res: Response) => {
     try {
-        const { symbol, assetClass } = req.query;
+        const { symbol, assetClass, interval } = req.query;
         if (!symbol || !assetClass) {
             return res.status(200).json({ success: false, candles: [], error: 'symbol and assetClass are required' });
         }
-        const candles = await getCandles(String(symbol), String(assetClass));
+        const candles = await getCandles(String(symbol), String(assetClass), interval ? String(interval) : '1day');
         if (!candles) return res.status(200).json({ success: false, candles: [], error: 'Chart data unavailable for this symbol right now' });
         res.json({ success: true, candles });
     } catch (e: any) {

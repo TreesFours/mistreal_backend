@@ -59,6 +59,26 @@ export const getAddonCatalog = (): AddonDefinition[] => [
         priceUsd: process.env.ADDON_VOICE_CLONING_PRICE_USD || '3.99',
         playProductId: process.env.ADDON_VOICE_CLONING_PLAY_PRODUCT_ID || 'addon_voice_cloning_monthly',
         stripePriceId: process.env.ADDON_VOICE_CLONING_STRIPE_PRICE_ID || null
+    },
+    {
+        // This fee is for Mistreal's OWN integration (the ad-account connect
+        // flow + campaign UI below) — separate from Zernio's own metered
+        // per-managed-ad cost, and separate again from whatever the user
+        // actually spends on ad budgets with Meta/Google/etc. Same
+        // three-way separation already established for voice_cloning above.
+        // Price is a placeholder consistent with this catalog's existing
+        // tier, not a considered business decision — change the env var
+        // once a real number is picked. Functionally gated on an external
+        // prerequisite this code can't verify: Zernio's own "Ads add-on"
+        // must be enabled on Mistreal's Zernio workspace, or every real
+        // campaign call 403s with ads_addon_required regardless of this
+        // addon being purchased.
+        id: 'zernio_ads',
+        label: 'Business Ads (via Zernio)',
+        description: 'Run real ad campaigns on Meta, Google, TikTok and more through your connected platforms — managed from inside Mistreal.',
+        priceUsd: process.env.ADDON_ZERNIO_ADS_PRICE_USD || '4.99',
+        playProductId: process.env.ADDON_ZERNIO_ADS_PLAY_PRODUCT_ID || 'addon_zernio_ads_monthly',
+        stripePriceId: process.env.ADDON_ZERNIO_ADS_STRIPE_PRICE_ID || null
     }
 ];
 

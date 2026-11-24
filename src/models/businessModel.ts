@@ -34,6 +34,13 @@ export class Business extends Model {
     // separately-uploaded photo, per the user's explicit choice of "either."
     public ownerName!: string | null;
     public ownerPhotoUrl!: string | null;
+    // [{platform, adAccountId}] — a connected AD account per platform,
+    // separate from connectedPlatforms (that's the social profile
+    // connection; an ad account is a distinct Zernio-side grant, see
+    // ZernioAdapter.getAdsConnectAuthUrl). A campaign is tied to a
+    // business, not a bare device, since ads naturally belong to whatever
+    // business is being promoted.
+    public connectedAdAccounts!: { platform: string; adAccountId: string }[];
 }
 
 Business.init({
@@ -49,7 +56,8 @@ Business.init({
     logoUrl: { type: DataTypes.STRING, allowNull: true },
     connectedPlatforms: { type: DataTypes.JSONB, defaultValue: [] },
     ownerName: { type: DataTypes.STRING, allowNull: true },
-    ownerPhotoUrl: { type: DataTypes.STRING, allowNull: true }
+    ownerPhotoUrl: { type: DataTypes.STRING, allowNull: true },
+    connectedAdAccounts: { type: DataTypes.JSONB, defaultValue: [] }
 }, {
     sequelize,
     modelName: 'Business',

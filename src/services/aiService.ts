@@ -400,7 +400,6 @@ export const getAvailableModels = async (isPro: boolean, freeUserCount: number =
                 capabilities: { text: true, imageGen: true, videoGen: false, voice: false }
             }))
         ];
-    }
 
     // Return the full catalog regardless of tier — isProOnly is metadata for the
     // client to lock/badge against, not a server-side visibility filter. Stripping

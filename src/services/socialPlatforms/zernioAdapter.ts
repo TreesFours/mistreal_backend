@@ -179,22 +179,41 @@ export const ZernioAdapter = {
       const posts = response.data?.posts || response.data?.data || response.data || [];
       if (!Array.isArray(posts)) return { available: true, items: [] };
 
+      // One item per Zernio post, NOT one per platform it was published to —
+      // a multi-platform post used to get exploded into N separate feed
+      // items (and, downstream in socialService.ts, N separate persisted
+      // SocialEvent rows) with no link between them. Zernio's own /posts
+      // response already carries the full platforms[] array on the one
+      // post object; merging here is the actual root-cause fix rather than
+      // a display-layer patch, since the duplication started at this exact
+      // explode-into-N loop.
       const items: any[] = [];
       for (const post of posts) {
         const platformEntries = Array.isArray(post.platforms) && post.platforms.length > 0
           ? post.platforms
           : [{ platform: 'unknown' }];
-        for (const pe of platformEntries) {
-          items.push({
-            _id: `${post.id}:${pe.platform}`,
-            platform: pe.platform,
-            author: { id: 'self', name: 'You' },
-            content: { text: post.content || '', attachments: (post.mediaUrls || []).map((url: string) => ({ url, type: guessAttachmentType(url) })) },
-            createdAt: post.publishedAt || post.createdAt,
-            metadata: { sourceUrl: pe.publishedUrl || null, status: post.status },
-            type: 'post'
-          });
-        }
+        const primary = platformEntries[0];
+        items.push({
+          _id: post.id,
+          platform: primary.platform,
+          author: { id: 'self', name: 'You' },
+          content: { text: post.content || '', attachments: (post.mediaUrls || []).map((url: string) => ({ url, type: guessAttachmentType(url) })) },
+          createdAt: post.publishedAt || post.createdAt,
+          metadata: {
+            sourceUrl: primary.publishedUrl || null,
+            status: post.status,
+            // Full per-platform detail preserved (not discarded) for any
+            // consumer that wants it, and so the client can show a "+N"
+            // indicator instead of silently only ever seeing the primary
+            // platform this post went to.
+            platforms: platformEntries.map((pe: any) => ({
+              platform: pe.platform,
+              publishedUrl: pe.publishedUrl || null,
+              status: pe.status || post.status
+            }))
+          },
+          type: 'post'
+        });
       }
       return { available: true, items };
     } catch (error: any) {
@@ -551,6 +570,118 @@ export const ZernioAdapter = {
     } catch (e: any) {
       console.error(`Zernio Delete Account Error [${accountId}]:`, e.response?.data || e.message);
       throw new Error(`Failed to delete account from Zernio: ${e.response?.data?.error || e.message}`);
+    }
+  },
+
+  // ============================================================
+  // ZERNIO ADS API — confirmed real in a prior session against their
+  // public OpenAPI spec/pricing page (base /v1/ads, real campaign CRUD
+  // across Meta/Google/TikTok/LinkedIn/Pinterest/X/OpenAI/Reddit/Microsoft
+  // Ads), but NOT re-verified against a live spec fetch in THIS session —
+  // same lower-confidence tier as the ElevenLabs integration, not the
+  // same tier as every endpoint above this point in the file (each of
+  // which has its own "CONFIRMED" annotation from being checked directly).
+  // Two prerequisites beyond a normal connected social profile, neither
+  // verifiable from this codebase: (1) a separately connected AD account
+  // per platform via getAdsConnectAuthUrl below, (2) Zernio's own "Ads
+  // add-on" enabled on this workspace — every call below 403s with
+  // ads_addon_required otherwise, surfaced verbatim rather than swallowed.
+  // ============================================================
+
+  /**
+   * Ad-account connection — mirrors getAuthUrl's exact /connect/{platform}
+   * shape above, with an accountType=ads param to request an AD account
+   * grant instead of a normal profile connection. The accountType param
+   * name/value is an assumption (not re-confirmed this session); if Zernio
+   * rejects it, check their real /connect query param names directly.
+   */
+  getAdsConnectAuthUrl: async (platform: string, profileId: string, state?: string, customRedirectUrl?: string) => {
+    try {
+      const baseUrl = process.env.APP_URL || 'https://mistreal-backend.onrender.com';
+      const callbackUrl = customRedirectUrl || `${baseUrl}/api/ad-campaigns/callback`;
+
+      const response = await axios.get(`${ZERNIO_API_URL}/connect/${encodeURIComponent(platform)}`, {
+        params: { profileId, accountType: 'ads', state, redirect_url: callbackUrl },
+        headers: { 'Authorization': `Bearer ${getApiKey()}` }
+      });
+      return response.data.authUrl || response.data.url || response.data.redirect_url;
+    } catch (error: any) {
+      const status = error.response?.status;
+      const data = error.response?.data;
+      if (data?.error === 'ads_addon_required' || status === 403) {
+        throw new Error('ADS_ADDON_REQUIRED: Enable the Ads add-on on this Zernio workspace before connecting an ad account.');
+      }
+      console.error(`Zernio Ads Connect Error [${platform}]:`, data || error.message);
+      throw new Error(`Ads connection error (${status}): ${data?.error || error.message}`);
+    }
+  },
+
+  createAdCampaign: async (adAccountId: string, campaign: Record<string, any>) => {
+    try {
+      const response = await axios.post(`${ZERNIO_API_URL}/ads`, { adAccountId, ...campaign }, {
+        headers: { 'Authorization': `Bearer ${getApiKey()}` }
+      });
+      return response.data;
+    } catch (error: any) {
+      const data = error.response?.data;
+      if (data?.error === 'ads_addon_required') throw new Error('ADS_ADDON_REQUIRED: Enable the Ads add-on on this Zernio workspace first.');
+      console.error('Zernio Create Campaign Error:', data || error.message);
+      throw new Error(`Failed to create ad campaign: ${data?.error || error.message}`);
+    }
+  },
+
+  updateAdCampaign: async (campaignId: string, updates: Record<string, any>) => {
+    try {
+      const response = await axios.put(`${ZERNIO_API_URL}/ads/${campaignId}`, updates, {
+        headers: { 'Authorization': `Bearer ${getApiKey()}` }
+      });
+      return response.data;
+    } catch (error: any) {
+      const data = error.response?.data;
+      if (data?.error === 'ads_addon_required') throw new Error('ADS_ADDON_REQUIRED: Enable the Ads add-on on this Zernio workspace first.');
+      console.error(`Zernio Update Campaign Error [${campaignId}]:`, data || error.message);
+      throw new Error(`Failed to update ad campaign: ${data?.error || error.message}`);
+    }
+  },
+
+  deleteAdCampaign: async (campaignId: string) => {
+    try {
+      const response = await axios.delete(`${ZERNIO_API_URL}/ads/${campaignId}`, {
+        headers: { 'Authorization': `Bearer ${getApiKey()}` }
+      });
+      return response.data;
+    } catch (error: any) {
+      const data = error.response?.data;
+      console.error(`Zernio Delete Campaign Error [${campaignId}]:`, data || error.message);
+      throw new Error(`Failed to delete ad campaign: ${data?.error || error.message}`);
+    }
+  },
+
+  listAdCampaigns: async (adAccountId: string) => {
+    try {
+      const response = await axios.get(`${ZERNIO_API_URL}/ads`, {
+        params: { adAccountId },
+        headers: { 'Authorization': `Bearer ${getApiKey()}` }
+      });
+      return response.data?.campaigns || response.data?.data || response.data || [];
+    } catch (error: any) {
+      const data = error.response?.data;
+      if (data?.error === 'ads_addon_required') throw new Error('ADS_ADDON_REQUIRED: Enable the Ads add-on on this Zernio workspace first.');
+      console.error('Zernio List Campaigns Error:', data || error.message);
+      throw new Error(`Failed to list ad campaigns: ${data?.error || error.message}`);
+    }
+  },
+
+  getAdCampaignAnalytics: async (campaignId: string) => {
+    try {
+      const response = await axios.get(`${ZERNIO_API_URL}/ads/${campaignId}/analytics`, {
+        headers: { 'Authorization': `Bearer ${getApiKey()}` }
+      });
+      return response.data;
+    } catch (error: any) {
+      const data = error.response?.data;
+      console.error(`Zernio Campaign Analytics Error [${campaignId}]:`, data || error.message);
+      throw new Error(`Failed to load campaign analytics: ${data?.error || error.message}`);
     }
   }
 };

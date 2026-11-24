@@ -228,6 +228,14 @@ export const getSocialSummary = async (user: User, isPro: boolean = false) => {
                 posts.push({
                     id: it._id || it.id,
                     platform: it.platform,
+                    // Set only when this one post actually went to more than
+                    // one platform (see zernioAdapter.ts::fetchFeed) — lets
+                    // the client show a "+N" indicator instead of the post
+                    // silently only ever appearing to belong to its primary
+                    // platform.
+                    platforms: Array.isArray(it.metadata?.platforms) && it.metadata.platforms.length > 1
+                        ? it.metadata.platforms.map((pe: any) => pe.platform)
+                        : null,
                     author: it.author?.name || it.author?.handle || 'Social Contact',
                     content: it.content?.text || it.content?.body || '',
                     timestamp: it.createdAt || it.timestamp || new Date().toISOString(),

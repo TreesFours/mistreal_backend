@@ -96,8 +96,11 @@ export const getQuote = async (symbol: string, assetClass: string): Promise<Quot
  * normalized shape regardless of which provider actually served it, so the
  * client's chart component never needs to know the difference.
  */
-export const getCandles = async (symbol: string, assetClass: string): Promise<Candle[] | null> => {
-    const cacheKey = `${assetClass}:${symbol}`;
+export const getCandles = async (symbol: string, assetClass: string, interval: string = '1day'): Promise<Candle[] | null> => {
+    // interval is now part of the cache key — a 1h and a 1day fetch for the
+    // same symbol used to collide under the old assetClass:symbol-only key,
+    // silently serving whichever granularity happened to be cached first.
+    const cacheKey = `${assetClass}:${symbol}:${interval}`;
     const today = new Date().toISOString().split('T')[0];
     const cached = candleCache.get(cacheKey);
     if (cached && cached.date === today) return cached.candles;
@@ -106,6 +109,12 @@ export const getCandles = async (symbol: string, assetClass: string): Promise<Ca
         let candles: Candle[] | null = null;
 
         if (assetClass === 'crypto') {
+            // CoinGecko's free /ohlc tier has no hourly granularity to
+            // request — confirmed, not assumed. Crypto always gets the
+            // existing daily series regardless of the requested interval;
+            // the client is expected to not offer 1h/4h chips for crypto at
+            // all (gated in MarketAlertsSection.kt) rather than round-trip
+            // to find this out.
             const id = COINGECKO_ID_MAP[symbol.toUpperCase()];
             if (!id) {
                 logger.warn(`⚠️ [Markets] getCandles: no CoinGecko id mapped for crypto symbol "${symbol}"`);
@@ -125,8 +134,13 @@ export const getCandles = async (symbol: string, assetClass: string): Promise<Ca
                 logger.warn(`⚠️ [Markets] getCandles(${symbol}): TWELVE_DATA_API_KEY not set`);
                 return null;
             }
+            // Twelve Data supports intraday intervals ('1h'/'4h') on this
+            // same endpoint — intraday requests use a smaller outputsize
+            // since 180 hourly/4h bars is plenty of chart history and
+            // keeps the response light.
+            const isIntraday = interval !== '1day';
             const resp = await axios.get('https://api.twelvedata.com/time_series', {
-                params: { symbol, interval: '1day', outputsize: 180, apikey: apiKey },
+                params: { symbol, interval, outputsize: isIntraday ? 90 : 180, apikey: apiKey },
                 timeout: 10000
             });
             if (resp.data?.status === 'error' || !Array.isArray(resp.data?.values)) {
