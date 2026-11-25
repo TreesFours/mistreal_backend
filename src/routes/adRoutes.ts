@@ -4,7 +4,7 @@ import * as admin from 'firebase-admin';
 import { getOrCreateUserInternal } from '../utils/userResolver';
 import { createAd, getNextAd, isAdDue, isEligibleForAds, trackAdEvent } from '../services/adService';
 import { Ad } from '../models/adModel';
-import { getActiveConfig, uploadFile as uploadToCloudStorage } from '../services/cloudStorageService';
+import { getActiveConfig, uploadFile as uploadToCloudStorage, InsufficientStorageError } from '../services/cloudStorageService';
 import logger from '../utils/logger';
 
 const router = Router();
@@ -35,6 +35,7 @@ export const persistToStorage = async (deviceId: string, buffer: Buffer, content
         try {
             return await uploadToCloudStorage(activeConfig, buffer, contentType, path);
         } catch (e: any) {
+            if (e instanceof InsufficientStorageError) throw e; // durable, user-actionable — don't paper over it
             logger.warn(`⚠️ Cloud storage upload failed for device ${deviceId}, falling back to Firebase: ${e.message}`);
         }
     }

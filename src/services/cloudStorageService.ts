@@ -11,6 +11,22 @@ export interface CloudFile {
     modifiedAt: string | null;
 }
 
+/**
+ * Thrown specifically for "the connected drive is out of space" (WebDAV's
+ * 507 Insufficient Storage) so the caller can tell this apart from a
+ * transient failure (server down, bad credentials) worth silently falling
+ * back to Firebase for. An out-of-space drive is a durable problem the user
+ * actually needs to know about — silently routing around it would mean
+ * their file lands in Mistreal's own storage with zero indication their
+ * drive never got it.
+ */
+export class InsufficientStorageError extends Error {
+    constructor(message: string = 'Your connected drive is out of space.') {
+        super(message);
+        this.name = 'InsufficientStorageError';
+    }
+}
+
 const joinUrl = (baseUrl: string, path: string): string => {
     const base = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
     const cleanPath = path.startsWith('/') ? path : `/${path}`;
@@ -47,12 +63,17 @@ export const uploadFile = async (config: CloudStorageConfig, buffer: Buffer, con
         }
     }
 
-    await axios.put(url, buffer, {
-        auth: { username: config.username, password },
-        headers: { 'Content-Type': contentType },
-        maxBodyLength: Infinity,
-        maxContentLength: Infinity
-    });
+    try {
+        await axios.put(url, buffer, {
+            auth: { username: config.username, password },
+            headers: { 'Content-Type': contentType },
+            maxBodyLength: Infinity,
+            maxContentLength: Infinity
+        });
+    } catch (e: any) {
+        if (e.response?.status === 507) throw new InsufficientStorageError();
+        throw e;
+    }
 
     return url;
 };
