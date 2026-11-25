@@ -32,6 +32,7 @@
     "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
     "nodemailer": "^6.9.14",
+    "pdfkit": "^0.21.0",
     "pg": "^8.12.0",
     "pg-hstore": "^2.3.4",
     "redis": "^5.0.0",
@@ -44,6 +45,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/pdfkit": "^0.17.7",
     "ts-node-dev": "^2.0.0"
   }
 }

@@ -37,6 +37,15 @@ export const chatSchema = z.object({
         contextMetadata: z.string().optional(),
         confirmArchRender: z.union([z.string(), z.boolean()]).optional(),
         archUnderstanding: z.string().optional(),
+        // Veo controls — multipart fields always arrive as strings, same
+        // reason confirmArchRender above is a union rather than a plain
+        // boolean. Real Veo constraints (durationSeconds in {4,6,8};
+        // aspectRatio in {16:9,9:16}; resolution requiring duration=8 for
+        // 1080p/4k) are enforced server-side in aiService.ts, not here —
+        // this schema only confirms the shape, not the actual values.
+        videoDurationSeconds: z.string().optional(),
+        videoAspectRatio: z.string().optional(),
+        videoResolution: z.string().optional(),
     }).refine(data => data.prompt || data.history, {
         message: "Either prompt or history (for voice) must be provided",
     })

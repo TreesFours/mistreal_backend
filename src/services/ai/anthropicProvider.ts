@@ -11,24 +11,46 @@ const REQUEST_TIMEOUT_MS = 20000;
  * (unlike the OpenAI-shaped providers, which fold system into the messages
  * array) — hence its own implementation rather than reuse of
  * OpenAiCompatibleProvider. Single model, no failover (user's own key).
+ *
+ * Images use Anthropic's documented base64 image content block
+ * ({type:"image", source:{type:"base64", media_type, data}}) mixed into the
+ * same content array as the text part — real vision input, not a silent
+ * drop, matching what GeminiProvider already does for the app-key path.
+ *
+ * Live search parity with Gemini's always-on google_search_retrieval: every
+ * request carries Anthropic's own native web_search tool
+ * (web_search_20250305) — Claude decides for itself whether a given prompt
+ * needs it. Billed through the user's own Anthropic key like any other BYOK
+ * usage, same separation as every other BYOK cost in this app.
  */
 export const AnthropicProvider: AiProvider = {
     id: 'anthropic',
     chat: async (req: ProviderChatRequest): Promise<ProviderChatResponse> => {
         const modelId = req.modelId || 'claude-3-5-sonnet-20241022';
 
-        if (req.imageDatas?.length || req.audioData) {
-            logger.warn('⚠️ AnthropicProvider: attachment present but BYOK text-only in this version — proceeding without it.');
+        if (req.audioData) {
+            logger.warn('⚠️ AnthropicProvider: audio attachment present but unsupported in this version — proceeding without it.');
         }
+
+        const currentContent: any = req.imageDatas?.length
+            ? [
+                { type: 'text', text: req.prompt },
+                ...req.imageDatas.map((data, i) => ({
+                    type: 'image',
+                    source: { type: 'base64', media_type: req.imageMimeTypes?.[i] || 'image/jpeg', data }
+                }))
+            ]
+            : req.prompt;
 
         try {
             const response = await axios.post(ANTHROPIC_API_URL, {
                 model: modelId,
                 system: req.systemInstruction,
                 max_tokens: 4096,
+                tools: [{ type: 'web_search_20250305', name: 'web_search' }],
                 messages: [
                     ...req.history.map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content })),
-                    { role: 'user', content: req.prompt }
+                    { role: 'user', content: currentContent }
                 ]
             }, {
                 headers: {
@@ -40,8 +62,13 @@ export const AnthropicProvider: AiProvider = {
                 validateStatus: () => true
             });
 
-            if (response.status === 200 && response.data?.content?.[0]?.text) {
-                return { content: response.data.content[0].text, modelUsed: modelId, success: true };
+            // With web_search active, content can interleave server_tool_use /
+            // web_search_tool_result blocks with text blocks — content[0] isn't
+            // reliably the answer any more, so collect every text block instead.
+            const blocks: any[] = response.data?.content;
+            if (response.status === 200 && Array.isArray(blocks) && blocks.length > 0) {
+                const text = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n\n').trim();
+                if (text) return { content: text, modelUsed: modelId, success: true };
             }
 
             const remoteError = response.data?.error?.message || response.statusText;

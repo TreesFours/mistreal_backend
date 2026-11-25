@@ -12,7 +12,15 @@ const normalizeOpenRouterModel = (modelId: string): string => {
     return modelId;
 };
 
-/** App-key path only (curated models) — BYOK never uses OpenRouter as a provider type. */
+/**
+ * App-key path only (curated models) — BYOK never uses OpenRouter as a provider type.
+ *
+ * Live-search parity with Gemini's always-on google_search_retrieval: every
+ * request carries OpenRouter's web plugin (`plugins:[{id:"web"}]`, the
+ * current non-deprecated replacement for the old `:online` model-slug
+ * suffix) so whichever model ends up answering can ground its reply in
+ * fresh results rather than only its training data.
+ */
 export const OpenRouterProvider: AiProvider = {
     id: 'openrouter',
     chat: async (req: ProviderChatRequest): Promise<ProviderChatResponse> => {
@@ -31,7 +39,8 @@ export const OpenRouterProvider: AiProvider = {
                         { role: 'system', content: req.systemInstruction },
                         ...req.history.map((m) => ({ role: m.role, content: m.content })),
                         { role: 'user', content: req.prompt }
-                    ]
+                    ],
+                    plugins: [{ id: 'web', max_results: 5 }]
                 }, {
                     headers: {
                         'Authorization': `Bearer ${req.apiKey}`,

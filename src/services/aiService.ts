@@ -1,4 +1,5 @@
 import axios from 'axios';
+import PDFDocument from 'pdfkit';
 import logger from '../utils/logger';
 import { GeminiProvider } from './ai/geminiProvider';
 import { OpenRouterProvider } from './ai/openRouterProvider';
@@ -24,6 +25,9 @@ export interface AiResponse {
     generatedImageMimeType?: string;
     generatedImageUrl?: string;
     generatedVideoUrl?: string;
+    generatedFileBase64?: string;
+    generatedFileMimeType?: string;
+    generatedFileName?: string;
     // Only ever set when Gemini's google_search_retrieval tool grounded the
     // answer — previously computed and immediately discarded.
     groundingCitations?: { uri: string; title?: string }[];
@@ -473,6 +477,95 @@ export const generateHuggingFaceImage = async (prompt: string, token?: string): 
 };
 
 /**
+ * 📄 Real PDF generation for the [FILE_REQUEST: ...] tag. This used to be
+ * pure theater: the model was told to emit the tag, and the only thing that
+ * happened with it was the client swapping the tag for cosmetic text
+ * ("Secure File generated and encrypted") — no file was ever created,
+ * anywhere. This renders the AI's own reply text into an actual PDF and
+ * hands back real bytes, same contract as generateImage's base64 return so
+ * the Android side can save it immediately and permanently (not through
+ * mediaStore.ts's 15-minute TTL store, which is designed for a quick "hand
+ * to Zernio" hop, not a file the user may want hours later).
+ */
+const generatePdfFile = async (title: string, bodyText: string): Promise<{ success: true; fileBase64: string } | { success: false; error: string }> => {
+    try {
+        const doc = new PDFDocument({ margin: 50 });
+        const chunks: Buffer[] = [];
+        // doc.end() does not synchronously flush the stream — the 'data'
+        // chunks and the final 'end' event arrive on later ticks, so the
+        // buffer has to be assembled by actually awaiting 'end', not read
+        // right after calling end().
+        const done = new Promise<Buffer>((resolve, reject) => {
+            doc.on('data', (chunk: Buffer) => chunks.push(chunk));
+            doc.on('end', () => resolve(Buffer.concat(chunks)));
+            doc.on('error', reject);
+        });
+        doc.fontSize(18).text(title || 'Mistreal AI Document', { underline: true });
+        doc.moveDown();
+        doc.fontSize(12).text(bodyText || '', { align: 'left' });
+        doc.end();
+        const buffer = await done;
+        return { success: true, fileBase64: buffer.toString('base64') };
+    } catch (error: any) {
+        logger.error('❌ PDF generation failed:', error.message);
+        return { success: false, error: error.message };
+    }
+};
+
+const sanitizePdfTitle = (title: string): string => title.replace(/[^A-Za-z0-9 _-]/g, '').trim() || 'Mistreal Document';
+
+/**
+ * Shared by every chat path (app-key Gemini, every BYOK provider) so "ask
+ * any connected AI to draw something" or "...to make me a file" behaves
+ * identically everywhere, instead of only working on the one branch that
+ * happened to check for it first. Checks the model's own reply text for the
+ * two tags its system prompt was told it can use, and resolves them for
+ * real:
+ *   [INLINE_MEDIA: prompt=...]              -> generates an image (Pollinations)
+ *   [FILE_REQUEST: type=pdf, title=...]     -> generates a real PDF of the reply
+ * Strips whichever tag matched from the visible text either way, so neither
+ * leaks into what the user reads.
+ */
+const attachGeneratedMedia = async (content: string, provider: string, groundingCitations?: { uri: string; title?: string }[]): Promise<AiResponse> => {
+    const inlineMediaMatch = content.match(/\[INLINE_MEDIA:\s*(?:style=([^,\s\]]+),\s*)?prompt=([^\]]+)\]/i);
+    if (inlineMediaMatch) {
+        const mediaPrompt = inlineMediaMatch[2].trim();
+        const cleanContent = content.replace(inlineMediaMatch[0], '').trim();
+        const imageRes = await generatePollinationsImage(mediaPrompt);
+        if (imageRes.success) {
+            return {
+                content: cleanContent, provider, success: true,
+                generatedImageBase64: imageRes.generatedImageBase64,
+                generatedImageMimeType: imageRes.generatedImageMimeType,
+                groundingCitations
+            };
+        }
+        return { content: cleanContent, provider, success: true, groundingCitations };
+    }
+
+    const fileRequestMatch = content.match(/\[FILE_REQUEST:\s*type=([a-z]+),\s*title=([^\]]+)\]/i);
+    if (fileRequestMatch) {
+        const title = sanitizePdfTitle(fileRequestMatch[2].trim());
+        const cleanContent = content.replace(fileRequestMatch[0], '').trim();
+        if (fileRequestMatch[1].toLowerCase() === 'pdf') {
+            const pdfResult = await generatePdfFile(title, cleanContent);
+            if (pdfResult.success) {
+                return {
+                    content: cleanContent, provider, success: true,
+                    generatedFileBase64: pdfResult.fileBase64,
+                    generatedFileMimeType: 'application/pdf',
+                    generatedFileName: `${title}.pdf`,
+                    groundingCitations
+                };
+            }
+        }
+        return { content: cleanContent, provider, success: true, groundingCitations };
+    }
+
+    return { content, provider, success: true, groundingCitations };
+};
+
+/**
  * 🖼️ Imagen 3 (synchronous, single REST call).
  */
 const generateImage = async (prompt: string, apiKey: string): Promise<AiResponse> => {
@@ -564,7 +657,8 @@ const editImage = async (prompt: string, imageDatas: string[], mimeTypes: string
  * relying on this in production.
  */
 const generateVideo = async (
-    prompt: string, apiKey: string, startImageBase64?: string, endImageBase64?: string
+    prompt: string, apiKey: string, startImageBase64?: string, endImageBase64?: string,
+    durationSeconds?: number, aspectRatio?: string, resolution?: string
 ): Promise<AiResponse> => {
     try {
         const instance: any = { prompt };
@@ -573,9 +667,23 @@ const generateVideo = async (
         if (startImageBase64) instance.image = { inlineData: { mimeType: 'image/jpeg', data: startImageBase64 } };
         if (endImageBase64) instance.lastFrame = { inlineData: { mimeType: 'image/jpeg', data: endImageBase64 } };
 
+        // Real Veo 3.1 constraints (confirmed against Google's own docs, not
+        // guessed): durationSeconds only accepts 4/6/8, aspectRatio only
+        // 16:9/9:16, and 1080p/4k resolution REQUIRES an 8-second clip — a
+        // request combining e.g. resolution=4k with durationSeconds=4 would
+        // just fail server-side, so that combination is corrected here
+        // rather than passed through broken.
+        const parameters: any = { sampleCount: 1 };
+        if (durationSeconds && [4, 6, 8].includes(durationSeconds)) parameters.durationSeconds = durationSeconds;
+        if (aspectRatio && ['16:9', '9:16'].includes(aspectRatio)) parameters.aspectRatio = aspectRatio;
+        if (resolution && ['720p', '1080p', '4k'].includes(resolution)) {
+            parameters.resolution = resolution;
+            if (resolution !== '720p') parameters.durationSeconds = 8;
+        }
+
         const startResponse = await axios.post(
             `${GOOGLE_AI_BASE_URL}/models/${VIDEO_GEN_MODEL_ID}:predictLongRunning?key=${apiKey}`,
-            { instances: [instance], parameters: { sampleCount: 1 } }
+            { instances: [instance], parameters }
         );
         const operationName = startResponse.data?.name;
         if (!operationName) {
@@ -610,7 +718,8 @@ const generateVideo = async (
 export const getAiResponse = async (
     prompt: string, provider: string, history: any[], user?: any, imageDatas?: string[],
     audioData?: string, videoData?: { base64: string, mimeType: string }, imageRoles?: string[],
-    confirmArchRender?: boolean, archUnderstanding?: string, imageMimeTypes?: string[]
+    confirmArchRender?: boolean, archUnderstanding?: string, imageMimeTypes?: string[],
+    videoDurationSeconds?: number, videoAspectRatio?: string, videoResolution?: string
 ): Promise<AiResponse> => {
     const geminiKeyForGeneration = process.env.GEMINI_API_KEY;
     // Scene Mode's keyframe images, pulled out by role rather than position —
@@ -696,7 +805,7 @@ export const getAiResponse = async (
             }
         }
         if (!geminiKeyForGeneration) return { content: '', provider, success: false, error: 'Video generation is not configured.' };
-        return generateVideo(prompt, geminiKeyForGeneration, startImageBase64, endImageBase64);
+        return generateVideo(prompt, geminiKeyForGeneration, startImageBase64, endImageBase64, videoDurationSeconds, videoAspectRatio, videoResolution);
     }
     if (provider === IMAGE_EDIT_MODEL_ID) {
         if (!geminiKeyForGeneration) return { content: '', provider, success: false, error: 'Image editing is not configured.' };
@@ -827,39 +936,36 @@ export const getAiResponse = async (
                 case 'openai':
                     result = await OpenAiCompatibleProvider.chat({
                         systemInstruction, history: byokHistory, prompt, apiKey,
-                        modelId: user.byokModelName || undefined, imageDatas, audioData
+                        modelId: user.byokModelName || undefined, imageDatas, imageMimeTypes, audioData
                     });
                     break;
                 case 'openai_compatible':
                     result = await OpenAiCompatibleProvider.chat({
                         systemInstruction, history: byokHistory, prompt, apiKey,
                         modelId: user.byokModelName || undefined, baseUrl: user.byokBaseUrl || undefined,
-                        imageDatas, audioData
+                        imageDatas, imageMimeTypes, audioData
                     });
                     break;
                 case 'anthropic':
                     result = await AnthropicProvider.chat({
                         systemInstruction, history: byokHistory, prompt, apiKey,
-                        modelId: user.byokModelName || undefined, imageDatas, audioData
+                        modelId: user.byokModelName || undefined, imageDatas, imageMimeTypes, audioData
                     });
                     break;
                 case 'gemini':
                     result = await GeminiProvider.chat({
                         systemInstruction, history: byokHistory, prompt, apiKey,
-                        modelCandidates: [user.byokModelName || 'gemini-1.5-flash'], imageDatas, audioData
+                        modelCandidates: [user.byokModelName || 'gemini-1.5-flash'], imageDatas, imageMimeTypes, audioData
                     });
                     break;
                 default:
                     return { content: '', provider: activeProvider, success: false, error: `Unknown BYOK provider type: ${user.byokProviderType}` };
             }
 
-            return {
-                content: result.content,
-                provider: `byok:${user.byokProviderType}`,
-                success: result.success,
-                error: result.error,
-                groundingCitations: result.groundingCitations
-            };
+            if (!result.success) {
+                return { content: '', provider: `byok:${user.byokProviderType}`, success: false, error: result.error };
+            }
+            return await attachGeneratedMedia(result.content, `byok:${user.byokProviderType}`, result.groundingCitations);
         } catch (error: any) {
             logger.error(`❌ BYOK execution error: ${error.message}`);
             return { content: '', provider: 'byok', success: false, error: error.message };
@@ -887,27 +993,11 @@ export const getAiResponse = async (
         const geminiHistory = history.map((m: any) => ({ role: m.role, content: m.content }));
         const result = await GeminiProvider.chat({
             systemInstruction, history: geminiHistory, prompt, apiKey: geminiKey,
-            modelCandidates: modelsToTry, imageDatas, audioData
+            modelCandidates: modelsToTry, imageDatas, imageMimeTypes, audioData
         });
 
         if (result.success) {
-            // Check for [INLINE_MEDIA: ...] tag in the response
-            const inlineMediaMatch = result.content.match(/\[INLINE_MEDIA:\s*(?:style=([^,\s\]]+),\s*)?prompt=([^\]]+)\]/i);
-            if (inlineMediaMatch) {
-                const mediaPrompt = inlineMediaMatch[2].trim();
-                const imageRes = await generatePollinationsImage(mediaPrompt);
-                if (imageRes.success) {
-                    return {
-                        content: result.content,
-                        provider: result.modelUsed,
-                        success: true,
-                        generatedImageBase64: imageRes.generatedImageBase64,
-                        generatedImageMimeType: imageRes.generatedImageMimeType,
-                        groundingCitations: result.groundingCitations
-                    };
-                }
-            }
-            return { content: result.content, provider: result.modelUsed, success: true, groundingCitations: result.groundingCitations };
+            return await attachGeneratedMedia(result.content, result.modelUsed, result.groundingCitations);
         }
 
         // 🚨 ULTIMATE EMERGENCY PIVOT: If all Google candidates fail, try OpenRouter as a bridge.
@@ -941,7 +1031,7 @@ export const getAiResponse = async (
     });
 
     if (orResult.success) {
-        return { content: orResult.content, provider: orResult.modelUsed, success: true };
+        return await attachGeneratedMedia(orResult.content, orResult.modelUsed);
     }
 
     // Mirror the Gemini->OpenRouter emergency pivot in the other direction —

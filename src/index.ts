@@ -271,7 +271,7 @@ app.get('/watch/:sessionId', (req, res) => {
 
 // 🧠 AI Chat
 app.post('/api/chat', upload.fields([{ name: 'images', maxCount: 5 }, { name: 'audio', maxCount: 1 }, { name: 'video', maxCount: 1 }]), validate(chatSchema), async (req, res) => {
-    let { prompt, provider, history, deviceId, firebaseUid, contextMetadata, imageRoles, confirmArchRender, archUnderstanding } = req.body;
+    let { prompt, provider, history, deviceId, firebaseUid, contextMetadata, imageRoles, confirmArchRender, archUnderstanding, videoDurationSeconds, videoAspectRatio, videoResolution } = req.body;
     const files = req.files as { images?: Express.Multer.File[], audio?: Express.Multer.File[], video?: Express.Multer.File[] };
 
     if (typeof history === 'string') {
@@ -309,7 +309,13 @@ app.post('/api/chat', upload.fields([{ name: 'images', maxCount: 5 }, { name: 'a
         enhancedPrompt = `[CONTEXT: ${contextMetadata}]\n\nUser Question: ${prompt}`;
     }
 
-    const response = await getAiResponse(enhancedPrompt, provider || 'dynamic', history || [], user, imageDatas, audioData, videoData, imageRoles, confirmArchRender, archUnderstanding, imageMimeTypes);
+    const response = await getAiResponse(
+        enhancedPrompt, provider || 'dynamic', history || [], user, imageDatas, audioData, videoData, imageRoles,
+        confirmArchRender, archUnderstanding, imageMimeTypes,
+        videoDurationSeconds ? parseInt(videoDurationSeconds, 10) : undefined,
+        videoAspectRatio || undefined,
+        videoResolution || undefined
+    );
 
     // 🛡️ AI NOTE: If you overhaul or fix logic here, log it in the "History & Notes" column of the Master Map.
     res.json(response);
