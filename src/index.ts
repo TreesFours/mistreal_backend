@@ -30,6 +30,7 @@ import { SocialToken } from './models/SocialToken';
 import { EmailMessage } from './models/EmailMessage'; // imported for Sequelize registration — table is created by sequelize.sync below
 import { AiProviderConfig } from './models/AiProviderConfig'; // same — registration only
 import { Business } from './models/businessModel'; // same — registration only
+import { BusinessItem } from './models/businessItemModel'; // same — registration only
 import { Ad, AdEvent } from './models/adModel'; // same — registration only
 import { sendMonthlyReportEmail } from './utils/mailer';
 import { CommunityPost } from './models/communityModel'; // same — registration only

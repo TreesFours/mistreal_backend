@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { Op } from 'sequelize';
 import { getOrCreateUserInternal } from '../utils/userResolver';
 import { Business } from '../models/businessModel';
+import { BusinessItem } from '../models/businessItemModel';
 import { MeetupProposal } from '../models/MeetupProposal';
 import { MeetupConfirmation } from '../models/MeetupConfirmation';
 import { persistToStorage } from './adRoutes';
@@ -142,6 +143,67 @@ router.post('/register', async (req: Request, res: Response) => {
 });
 
 /**
+ * Business inventory — previously local-Room-only on the owner's own
+ * device (BusinessItemEntity), with no backend route at all, so no other
+ * device could ever see what a business actually sells. Same auth shape
+ * as owner-photo/logo above: deviceId must match the business's
+ * ownerDeviceId to write. Image upload mirrors createAdvert's base64 path,
+ * not owner-photo's PUT-style one-slot replace, since a business can have
+ * many items.
+ */
+router.post('/:businessId/items', async (req: Request, res: Response) => {
+    try {
+        const { deviceId, name, price, imageBase64, imageMimeType } = req.body;
+        if (!deviceId || !name) return res.status(200).json({ success: false, error: 'deviceId and name are required' });
+
+        const business = await Business.findOne({ where: { businessId: req.params.businessId, ownerDeviceId: deviceId } });
+        if (!business) return res.status(200).json({ success: false, error: 'Business not found for this device' });
+
+        let imageUrl: string | null = null;
+        if (imageBase64) {
+            const buffer = Buffer.from(imageBase64, 'base64');
+            imageUrl = await persistToStorage(deviceId, buffer, imageMimeType || 'image/jpeg', `business_items/${req.params.businessId}_${Date.now()}.jpg`);
+        }
+
+        const item = await BusinessItem.create({ businessId: req.params.businessId, name, price: price || null, imageUrl });
+        res.json({ success: true, item });
+    } catch (e: any) {
+        logger.error(`❌ POST /business/:businessId/items error: ${e.message}`);
+        res.status(200).json({ success: false, error: e.message });
+    }
+});
+
+/** Public — any device viewing a business's profile needs this, not just the owner. */
+router.get('/:businessId/items', async (req: Request, res: Response) => {
+    try {
+        const items = await BusinessItem.findAll({ where: { businessId: req.params.businessId }, order: [['createdAt', 'DESC']] });
+        res.json({ success: true, items });
+    } catch (e: any) {
+        logger.error(`❌ GET /business/:businessId/items error: ${e.message}`);
+        res.status(200).json({ success: false, items: [], error: e.message });
+    }
+});
+
+router.delete('/:businessId/items/:itemId', async (req: Request, res: Response) => {
+    try {
+        const deviceId = req.query.deviceId as string;
+        if (!deviceId) return res.status(200).json({ success: false, error: 'deviceId is required' });
+
+        const business = await Business.findOne({ where: { businessId: req.params.businessId, ownerDeviceId: deviceId } });
+        if (!business) return res.status(200).json({ success: false, error: 'Business not found for this device' });
+
+        const item = await BusinessItem.findOne({ where: { id: req.params.itemId, businessId: req.params.businessId } });
+        if (!item) return res.status(200).json({ success: false, error: 'Item not found' });
+        await item.destroy();
+
+        res.json({ success: true });
+    } catch (e: any) {
+        logger.error(`❌ DELETE /business/:businessId/items/:itemId error: ${e.message}`);
+        res.status(200).json({ success: false, error: e.message });
+    }
+});
+
+/**
  * The cross-device business directory that never existed before — this is
  * the first endpoint that lets any user see a business someone ELSE
  * registered. `city` is a plain substring match against the free-text
@@ -164,8 +226,9 @@ router.get('/search', async (req: Request, res: Response) => {
             // Matches business name OR address against the same query —
             // previously only address/city was searchable, so searching
             // by business name silently returned nothing. Matching actual
-            // inventory items (goods/services) isn't possible yet — that
-            // table is still local-Room-only, never mirrored server-side.
+            // inventory items (goods/services) by name still isn't wired
+            // into this search, even though the table itself is now
+            // mirrored server-side — see BusinessItem/:businessId/items.
             where[Op.or as any] = [
                 { name: { [Op.iLike]: `%${city}%` } },
                 { address: { [Op.iLike]: `%${city}%` } }
@@ -264,6 +327,8 @@ router.get('/:businessId', async (req: Request, res: Response) => {
         const business = await Business.findByPk(req.params.businessId);
         if (!business) return res.status(200).json({ success: false, error: 'Business not found' });
 
+        const items = await BusinessItem.findAll({ where: { businessId: req.params.businessId }, order: [['createdAt', 'DESC']] });
+
         const meetupIds = (await MeetupProposal.findAll({ where: { businessId: req.params.businessId }, attributes: ['id'] })).map(m => m.id);
         const successfulConfirmations = meetupIds.length === 0 ? [] : await MeetupConfirmation.findAll({
             where: { meetupId: { [Op.in]: meetupIds }, outcome: 'success' }
@@ -278,6 +343,7 @@ router.get('/:businessId', async (req: Request, res: Response) => {
         res.json({
             success: true,
             business,
+            items,
             confirmedMeetupsCount: successfulConfirmations.length,
             upvotes,
             downvotes,
