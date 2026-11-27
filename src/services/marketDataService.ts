@@ -37,6 +37,17 @@ export interface Candle {
 // and a crowded day doesn't multiply calls to either provider's free tier.
 const candleCache = new Map<string, { date: string; candles: Candle[] }>();
 
+// Quotes had no caching at all — every single /watchlist request fired one
+// fresh provider call per symbol, from every user, with no sharing between
+// them. Harmless at the original 4-crypto/8-non-crypto size, but expanding
+// the watchlist to a real comprehensive list without this would mean 20+
+// simultaneous Twelve Data calls per request against a free-tier rate limit
+// that's typically far tighter than that (commonly ~8/minute) — this short
+// TTL means concurrent/rapid requests across all users share one real fetch
+// per symbol instead of each paying for their own.
+const QUOTE_CACHE_TTL_MS = 30_000;
+const quoteCache = new Map<string, { fetchedAt: number; quote: Quote | null }>();
+
 /**
  * Live quote for one symbol — dispatches to Twelve Data (stocks/commodities)
  * or CoinGecko (crypto) depending on assetClass. Returns null on any failure
@@ -44,6 +55,16 @@ const candleCache = new Map<string, { date: string; candles: Candle[] }>();
  * "unavailable right now," never as a price of zero.
  */
 export const getQuote = async (symbol: string, assetClass: string): Promise<Quote | null> => {
+    const cacheKey = `${assetClass}:${symbol}`;
+    const cached = quoteCache.get(cacheKey);
+    if (cached && Date.now() - cached.fetchedAt < QUOTE_CACHE_TTL_MS) return cached.quote;
+
+    const quote = await fetchQuoteUncached(symbol, assetClass);
+    quoteCache.set(cacheKey, { fetchedAt: Date.now(), quote });
+    return quote;
+};
+
+const fetchQuoteUncached = async (symbol: string, assetClass: string): Promise<Quote | null> => {
     try {
         if (assetClass === 'crypto') {
             const id = COINGECKO_ID_MAP[symbol.toUpperCase()];

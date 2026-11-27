@@ -190,6 +190,24 @@ const initDb = async () => {
             await sequelize.authenticate();
             await sequelize.sync({ alter: true });
             console.log('✅ DB Initialized');
+
+            // Sequelize's `sync({ alter: true })` does not add new allowed
+            // values to an existing Postgres native enum type — confirmed the
+            // real cause Airforce Assault never actually landed in the live
+            // Games table despite seedAirforceAssaultIfMissing() running on
+            // every boot: sourceType's enum type was created with only
+            // 'external' as a valid value, so every insert attempting
+            // 'hosted' has been silently failing (caught and logged, not
+            // crashing). This is the one-time, non-destructive fix — adding
+            // a new allowed value to an enum type, not touching existing
+            // rows or the column's type itself. Safe to run on every boot:
+            // IF NOT EXISTS makes it a no-op once the value is already there.
+            try {
+                await sequelize.query(`ALTER TYPE "enum_Games_sourceType" ADD VALUE IF NOT EXISTS 'hosted'`);
+            } catch (enumErr: any) {
+                console.error('❌ Failed to add "hosted" to enum_Games_sourceType:', enumErr.message);
+            }
+
             await seedGamesIfEmpty();
         } catch (err: any) {
             console.error('❌ DB Init Failed:', err.message);

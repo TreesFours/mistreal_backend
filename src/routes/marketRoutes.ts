@@ -7,17 +7,41 @@ import logger from '../utils/logger';
 
 const router = Router();
 
-// A handful of majors everyone sees for free, independent of any user's own
-// alerts — mirrors the Free/Premium split already used for AI models.
-// `band` groups these for the client's three ticker rows (Market screen) —
-// forex needs no new provider wiring: Twelve Data's /quote and /time_series
-// already accept "EUR/USD"-style symbols through the exact same non-crypto
-// branch stock/commodity symbols already use in marketDataService.ts.
+// Was a deliberate "handful of majors" (4 crypto / 6 forex / 2 stocks / 2
+// commodities) — too small to read as a real market ticker, and most of
+// marketDataService.ts's own 31-coin COINGECKO_ID_MAP was never actually
+// used here. Expanded to use that full map plus the standard forex majors
+// Twelve Data's free /quote endpoint already accepts in the same "EUR/USD"
+// shape. `band` groups these for the client's ticker rows (Market screen).
+// Commodities are deliberately not expanded further — Twelve Data's free
+// tier is the likely reason XAU/USD and WTI/USD return no quote live today
+// (commodity data is typically a paid-plan feature there); adding more
+// commodity symbols wouldn't fix that, a plan decision would.
 const SHARED_WATCHLIST = [
     { symbol: 'BTC', assetClass: 'crypto', band: 'crypto' },
     { symbol: 'ETH', assetClass: 'crypto', band: 'crypto' },
     { symbol: 'SOL', assetClass: 'crypto', band: 'crypto' },
     { symbol: 'XRP', assetClass: 'crypto', band: 'crypto' },
+    { symbol: 'DOGE', assetClass: 'crypto', band: 'crypto' },
+    { symbol: 'ADA', assetClass: 'crypto', band: 'crypto' },
+    { symbol: 'BNB', assetClass: 'crypto', band: 'crypto' },
+    { symbol: 'LTC', assetClass: 'crypto', band: 'crypto' },
+    { symbol: 'MATIC', assetClass: 'crypto', band: 'crypto' },
+    { symbol: 'DOT', assetClass: 'crypto', band: 'crypto' },
+    { symbol: 'AVAX', assetClass: 'crypto', band: 'crypto' },
+    { symbol: 'LINK', assetClass: 'crypto', band: 'crypto' },
+    { symbol: 'ATOM', assetClass: 'crypto', band: 'crypto' },
+    { symbol: 'SHIB', assetClass: 'crypto', band: 'crypto' },
+    { symbol: 'UNI', assetClass: 'crypto', band: 'crypto' },
+    { symbol: 'NEAR', assetClass: 'crypto', band: 'crypto' },
+    { symbol: 'SUI', assetClass: 'crypto', band: 'crypto' },
+    { symbol: 'APT', assetClass: 'crypto', band: 'crypto' },
+    { symbol: 'ARB', assetClass: 'crypto', band: 'crypto' },
+    { symbol: 'OP', assetClass: 'crypto', band: 'crypto' },
+    { symbol: 'FIL', assetClass: 'crypto', band: 'crypto' },
+    { symbol: 'ICP', assetClass: 'crypto', band: 'crypto' },
+    { symbol: 'XLM', assetClass: 'crypto', band: 'crypto' },
+    { symbol: 'ALGO', assetClass: 'crypto', band: 'crypto' },
 
     { symbol: 'EUR/USD', assetClass: 'forex', band: 'forex' },
     { symbol: 'GBP/USD', assetClass: 'forex', band: 'forex' },
@@ -25,10 +49,21 @@ const SHARED_WATCHLIST = [
     { symbol: 'USD/CHF', assetClass: 'forex', band: 'forex' },
     { symbol: 'AUD/USD', assetClass: 'forex', band: 'forex' },
     { symbol: 'USD/CAD', assetClass: 'forex', band: 'forex' },
+    { symbol: 'NZD/USD', assetClass: 'forex', band: 'forex' },
+    { symbol: 'EUR/GBP', assetClass: 'forex', band: 'forex' },
+    { symbol: 'EUR/JPY', assetClass: 'forex', band: 'forex' },
+    { symbol: 'USD/ZAR', assetClass: 'forex', band: 'forex' },
+    { symbol: 'USD/INR', assetClass: 'forex', band: 'forex' },
+    { symbol: 'USD/NGN', assetClass: 'forex', band: 'forex' },
 
     { symbol: 'AAPL', assetClass: 'stock', band: 'tickers' },
     { symbol: 'MSFT', assetClass: 'stock', band: 'tickers' },
+    { symbol: 'GOOGL', assetClass: 'stock', band: 'tickers' },
+    { symbol: 'AMZN', assetClass: 'stock', band: 'tickers' },
+    { symbol: 'TSLA', assetClass: 'stock', band: 'tickers' },
+    { symbol: 'NVDA', assetClass: 'stock', band: 'tickers' },
     { symbol: 'XAU/USD', assetClass: 'commodity', band: 'tickers' },
+    { symbol: 'XAG/USD', assetClass: 'commodity', band: 'tickers' },
     { symbol: 'WTI/USD', assetClass: 'commodity', band: 'tickers' }
 ];
 
