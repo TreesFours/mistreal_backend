@@ -54,20 +54,24 @@ const quoteCache = new Map<string, { fetchedAt: number; quote: Quote | null }>()
  * (missing key, unknown symbol, provider error) — callers must treat that as
  * "unavailable right now," never as a price of zero.
  */
-export const getQuote = async (symbol: string, assetClass: string): Promise<Quote | null> => {
+// coingeckoId lets a caller quote a crypto symbol that isn't in the
+// hand-curated COINGECKO_ID_MAP at all — search() below resolves the real id
+// from CoinGecko's own search endpoint for exactly this, so "all tickers,
+// searchable" doesn't require hand-adding every coin to the map first.
+export const getQuote = async (symbol: string, assetClass: string, coingeckoId?: string): Promise<Quote | null> => {
     const cacheKey = `${assetClass}:${symbol}`;
     const cached = quoteCache.get(cacheKey);
     if (cached && Date.now() - cached.fetchedAt < QUOTE_CACHE_TTL_MS) return cached.quote;
 
-    const quote = await fetchQuoteUncached(symbol, assetClass);
+    const quote = await fetchQuoteUncached(symbol, assetClass, coingeckoId);
     quoteCache.set(cacheKey, { fetchedAt: Date.now(), quote });
     return quote;
 };
 
-const fetchQuoteUncached = async (symbol: string, assetClass: string): Promise<Quote | null> => {
+const fetchQuoteUncached = async (symbol: string, assetClass: string, coingeckoId?: string): Promise<Quote | null> => {
     try {
         if (assetClass === 'crypto') {
-            const id = COINGECKO_ID_MAP[symbol.toUpperCase()];
+            const id = coingeckoId || COINGECKO_ID_MAP[symbol.toUpperCase()];
             if (!id) {
                 logger.warn(`⚠️ [Markets] getQuote: no CoinGecko id mapped for crypto symbol "${symbol}" — add it to COINGECKO_ID_MAP`);
                 return null;
@@ -117,7 +121,7 @@ const fetchQuoteUncached = async (symbol: string, assetClass: string): Promise<Q
  * normalized shape regardless of which provider actually served it, so the
  * client's chart component never needs to know the difference.
  */
-export const getCandles = async (symbol: string, assetClass: string, interval: string = '1day'): Promise<Candle[] | null> => {
+export const getCandles = async (symbol: string, assetClass: string, interval: string = '1day', coingeckoId?: string): Promise<Candle[] | null> => {
     // interval is now part of the cache key — a 1h and a 1day fetch for the
     // same symbol used to collide under the old assetClass:symbol-only key,
     // silently serving whichever granularity happened to be cached first.
@@ -136,7 +140,7 @@ export const getCandles = async (symbol: string, assetClass: string, interval: s
             // the client is expected to not offer 1h/4h chips for crypto at
             // all (gated in MarketAlertsSection.kt) rather than round-trip
             // to find this out.
-            const id = COINGECKO_ID_MAP[symbol.toUpperCase()];
+            const id = coingeckoId || COINGECKO_ID_MAP[symbol.toUpperCase()];
             if (!id) {
                 logger.warn(`⚠️ [Markets] getCandles: no CoinGecko id mapped for crypto symbol "${symbol}"`);
                 return null;
@@ -180,6 +184,60 @@ export const getCandles = async (symbol: string, assetClass: string, interval: s
         logger.warn(`⚠️ [Markets] Candle fetch failed for ${symbol} (${assetClass}): ${e.message}`);
         return null;
     }
+};
+
+export interface SymbolSearchResult {
+    symbol: string;
+    name: string;
+    assetClass: string;
+    // Only ever set for crypto — the real CoinGecko id, so a result not in
+    // COINGECKO_ID_MAP is still quotable immediately (see getQuote/getCandles
+    // above), without needing it hand-added to the map first.
+    coingeckoId?: string;
+}
+
+// "All tickers, searchable" without proactively polling hundreds of symbols
+// (which would blow through Twelve Data's free-tier rate limit fast) — this
+// only ever runs on an explicit user search, each result quoted on-demand
+// afterward through the existing cached getQuote/getCandles, same as every
+// symbol already in SHARED_WATCHLIST.
+export const searchSymbols = async (query: string): Promise<SymbolSearchResult[]> => {
+    const results: SymbolSearchResult[] = [];
+
+    try {
+        const cgResp = await axios.get('https://api.coingecko.com/api/v3/search', {
+            params: { query }, timeout: 8000
+        });
+        (cgResp.data?.coins || []).slice(0, 10).forEach((c: any) => {
+            results.push({ symbol: (c.symbol || '').toUpperCase(), name: c.name, assetClass: 'crypto', coingeckoId: c.id });
+        });
+    } catch (e: any) {
+        logger.warn(`⚠️ [Markets] CoinGecko search warning: ${e.message}`);
+    }
+
+    const apiKey = process.env.TWELVE_DATA_API_KEY;
+    if (apiKey) {
+        try {
+            const tdResp = await axios.get('https://api.twelvedata.com/symbol_search', {
+                params: { symbol: query, apikey: apiKey }, timeout: 8000
+            });
+            (tdResp.data?.data || []).slice(0, 10).forEach((s: any) => {
+                // instrument_type distinguishes "Common Stock" from
+                // forex/ETF/etc — only stock-shaped results are mapped to
+                // 'stock' here; everything else Twelve Data could return
+                // (ETF, index) is skipped rather than mis-tagged into a
+                // chart path (forex/commodity) that expects a different
+                // symbol shape ("EUR/USD", not "XYZ").
+                if (s.instrument_type === 'Common Stock') {
+                    results.push({ symbol: s.symbol, name: s.instrument_name, assetClass: 'stock' });
+                }
+            });
+        } catch (e: any) {
+            logger.warn(`⚠️ [Markets] Twelve Data symbol_search warning: ${e.message}`);
+        }
+    }
+
+    return results;
 };
 
 /**

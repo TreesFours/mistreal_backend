@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { Op } from 'sequelize';
 import { getOrCreateUserInternal } from '../utils/userResolver';
 import { MarketAlert } from '../models/MarketAlert';
-import { getQuote, getCandles } from '../services/marketDataService';
+import { getQuote, getCandles, searchSymbols } from '../services/marketDataService';
 import logger from '../utils/logger';
 
 const router = Router();
@@ -92,16 +92,33 @@ router.get('/watchlist', async (_req: Request, res: Response) => {
 
 router.get('/candles', async (req: Request, res: Response) => {
     try {
-        const { symbol, assetClass, interval } = req.query;
+        const { symbol, assetClass, interval, coingeckoId } = req.query;
         if (!symbol || !assetClass) {
             return res.status(200).json({ success: false, candles: [], error: 'symbol and assetClass are required' });
         }
-        const candles = await getCandles(String(symbol), String(assetClass), interval ? String(interval) : '1day');
+        const candles = await getCandles(String(symbol), String(assetClass), interval ? String(interval) : '1day', coingeckoId ? String(coingeckoId) : undefined);
         if (!candles) return res.status(200).json({ success: false, candles: [], error: 'Chart data unavailable for this symbol right now' });
         res.json({ success: true, candles });
     } catch (e: any) {
         logger.error(`❌ GET /markets/candles error: ${e.message}`);
         res.status(200).json({ success: false, candles: [], error: e.message });
+    }
+});
+
+// Search any symbol beyond the fixed SHARED_WATCHLIST — see searchSymbols'
+// own comment in marketDataService.ts for why this stays on-demand only
+// rather than growing the proactively-polled watchlist itself.
+router.get('/search', async (req: Request, res: Response) => {
+    try {
+        const { q } = req.query;
+        if (!q || typeof q !== 'string' || q.trim().length === 0) {
+            return res.status(200).json({ success: false, results: [], error: 'q is required' });
+        }
+        const results = await searchSymbols(q.trim());
+        res.json({ success: true, results });
+    } catch (e: any) {
+        logger.error(`❌ GET /markets/search error: ${e.message}`);
+        res.status(200).json({ success: false, results: [], error: e.message });
     }
 });
 
