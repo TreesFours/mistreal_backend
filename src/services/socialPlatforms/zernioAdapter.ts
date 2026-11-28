@@ -306,11 +306,16 @@ export const ZernioAdapter = {
       // Default: create/publish a post (Tweet, FB Post, etc). Confirmed body
       // shape has no story/status flag — that's not a verified capability of
       // this endpoint, so it's not attempted here rather than guessed at.
+      // mediaUrls fallback mirrors the Direct Message branch above — this
+      // used to build from mediaUrl alone, silently dropping every
+      // attachment past the first whenever a caller passed the mediaUrls
+      // array (which the function signature already accepted).
+      const effectivePostMediaUrls = (mediaUrls && mediaUrls.length > 0) ? mediaUrls : (mediaUrl ? [mediaUrl] : undefined);
       const postData: any = {
         content,
         publishNow: true,
         platforms: [{ platform, accountId }],
-        mediaUrls: mediaUrl ? [mediaUrl] : undefined
+        mediaUrls: effectivePostMediaUrls
       };
 
       const response = await axios.post(`${ZERNIO_API_URL}/posts`, postData, {
