@@ -37,6 +37,9 @@ export const chatSchema = z.object({
         contextMetadata: z.string().optional(),
         confirmArchRender: z.union([z.string(), z.boolean()]).optional(),
         archUnderstanding: z.string().optional(),
+        // Free-text label — IMAGE_STYLE_DESCRIPTORS in aiService.ts owns the
+        // actual known keys; an unrecognized value is just a no-op there.
+        imageStyle: z.string().optional(),
         // Veo controls — multipart fields always arrive as strings, same
         // reason confirmArchRender above is a union rather than a plain
         // boolean. Real Veo constraints (durationSeconds in {4,6,8};

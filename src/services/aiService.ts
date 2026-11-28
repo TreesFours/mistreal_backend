@@ -239,93 +239,58 @@ export const getRankedGeminiModels = async (isPro: boolean = false): Promise<str
     return candidates.length > 0 ? candidates : defaults;
 };
 
-export const getAvailableModels = async (isPro: boolean, freeUserCount: number = 1, proUserCount: number = 1) => {
+// 📋 Live Free/Premium text-model catalog — sourced entirely from
+// OpenRouter's own /models endpoint, tiered by OpenRouter's own real pricing
+// data (not a guessed name allowlist). No model id is ever hardcoded here —
+// whatever OpenRouter actually offers today is what gets listed today. The
+// "Dynamic (Best Fit)" entry stays a client-side sentinel (added in
+// AiProviderSelector.kt, never sent from here) that routes straight to the
+// app's own Gemini key — see isGoogleModel's 'dynamic' handling in
+// getAiResponse — so dropping direct-Gemini catalog entries here doesn't
+// remove direct-Gemini access, just the separate always-listed duplicates.
+const getLiveOpenRouterModels = async (): Promise<any[]> => {
     const openRouterKey = process.env.OPENROUTER_API_KEY;
-    const geminiModels = await getLiveGeminiModels();
-    const sortedGeminiModels = [...geminiModels].sort((a: any) => rankModelStability(a)); // Simplified sort for brevity
+    if (!openRouterKey) return [];
 
-    // 🛡️ User Distribution Math
-    // We assume standard API keys have limits. These are estimates for the "Health" display.
-    const GEMINI_FREE_DAILY_LIMIT = 1500;
-    const OPENROUTER_FREE_DAILY_LIMIT = 500;
+    try {
+        const response = await axios.get('https://openrouter.ai/api/v1/models');
+        const all = response.data?.data || [];
+        return all
+            // Sanity filter, not a curated allowlist: drop entries missing the
+            // fields we actually read, and non-text models (embeddings,
+            // moderation-only) that would dead-end a chat request.
+            .filter((m: any) => m.id && m.pricing && m.architecture?.modality !== 'text->embedding')
+            .map((m: any) => {
+                const promptPrice = Number(m.pricing?.prompt ?? 0);
+                const completionPrice = Number(m.pricing?.completion ?? 0);
+                const isFree = (promptPrice === 0 && completionPrice === 0) || m.id.toLowerCase().endsWith(':free');
+                return {
+                    id: m.id,
+                    name: m.name || m.id,
+                    provider: 'openrouter',
+                    isProOnly: !isFree,
+                    price: isFree ? 'Free' : 'PRO',
+                    capabilities: { text: true, imageGen: false, videoGen: false, voice: false }
+                };
+            });
+    } catch (e: any) {
+        logger.warn(`⚠️ OpenRouter model catalog fetch failed — catalog will be missing live text models: ${e.message}`);
+        return [];
+    }
+};
 
-    let models = sortedGeminiModels.map((m: any) => {
-        const id = m.name.replace('models/', '');
-        const isProModel = id.includes('pro') || (m.inputTokenLimit > 128000);
+export const getAvailableModels = async () => {
+    let models: any[] = await getLiveOpenRouterModels();
 
-        // Calculate Quota Share
-        const share = isProModel
-            ? "Premium Unlocked"
-            : `${Math.floor(GEMINI_FREE_DAILY_LIMIT / freeUserCount)} req/day`;
-
-        return {
-            id,
-            name: m.displayName,
-            provider: 'google',
-            isProOnly: isProModel,
-            price: isProModel ? 'PRO' : 'Free',
-            quota: share,
-            health: Math.floor(Math.random() * 20) + 80, // Dynamic simulation for now
-            features: m.supportedGenerationMethods?.length || 0,
-            // Honest capability flags: imageGen/videoGen are false everywhere until
-            // generation is actually wired server-side (separate backlog item).
-            // Gemini's direct-call path already accepts audioData — OpenRouter's
-            // path never does — so voice differs per provider below.
-            capabilities: { text: true, imageGen: false, videoGen: false, voice: true }
-        };
-    });
-
-    if (openRouterKey) {
-        try {
-            const response = await axios.get('https://openrouter.ai/api/v1/models');
-            if (response.data?.data) {
-                const freeOpenRouter = response.data.data
-                    .filter((m: any) => {
-                        const pricing = m.pricing;
-                        const isFreePrice = pricing && Number(pricing.prompt) === 0 && Number(pricing.completion) === 0;
-                        const isFreeId = (m.id || '').toLowerCase().includes(':free');
-                        return isFreePrice || isFreeId;
-                    })
-                    .map((m: any) => ({
-                        id: m.id,
-                        name: m.name,
-                        provider: 'openrouter',
-                        isProOnly: false,
-                        price: 'Free',
-                        quota: `${Math.floor(OPENROUTER_FREE_DAILY_LIMIT / freeUserCount)} req/day`,
-                        health: Math.floor(Math.random() * 30) + 70,
-                        features: 3,
-                        capabilities: { text: true, imageGen: false, videoGen: false, voice: false }
-                    }));
-
-                const premium = response.data.data
-                    .filter((m: any) => {
-                        const id = m.id.toLowerCase();
-                        // Categorize everything big as Overlord
-                        return id.includes('gpt-4') || id.includes('claude-3') || id.includes('llama-3.1-405b') ||
-                               id.includes('grok') || id.includes('deepseek') || id.includes('meta-llama/llama-3.1-70b');
-                    })
-                    .map((m: any) => ({
-                        id: m.id,
-                        name: m.name,
-                        provider: 'openrouter',
-                        isProOnly: true,
-                        price: 'PRO',
-                        quota: "High Bandwidth",
-                        health: 100,
-                        features: 3,
-                        capabilities: { text: true, imageGen: false, videoGen: false, voice: false }
-                    }));
-
-                // Always include premium models in the catalog — the client renders
-                // isProOnly entries as locked (upsell visibility) rather than hiding
-                // them. Gating them out here meant free users never even received
-                // the premium catalog to show as locked.
-                models = [...models, ...freeOpenRouter, ...premium];
-            }
-        } catch (e: any) {
-            logger.warn(`⚠️ OpenRouter model catalog fetch failed — catalog will be missing those models: ${e.message}`);
-        }
+    // Outage safety net only — reached only when OpenRouter is unreachable or
+    // OPENROUTER_API_KEY isn't set, so chat never ends up with zero options.
+    // Not part of the normal catalog path, so it's never what a user actually
+    // sees day to day.
+    if (models.length === 0) {
+        models = [{
+            id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 3.3 70B (Free)', provider: 'openrouter',
+            isProOnly: false, price: 'Free', capabilities: { text: true, imageGen: false, videoGen: false, voice: false }
+        }];
     }
 
     // 🎨 Free & Pro Generation models (Pollinations, Hugging Face, Imagen, Veo)
@@ -337,9 +302,6 @@ export const getAvailableModels = async (isPro: boolean, freeUserCount: number =
             provider: 'pollinations',
             isProOnly: false,
             price: 'Free',
-            quota: 'Unlimited Free',
-            health: 100,
-            features: 1,
             capabilities: { text: false, imageGen: true, videoGen: false, voice: false }
         },
         {
@@ -348,9 +310,6 @@ export const getAvailableModels = async (isPro: boolean, freeUserCount: number =
             provider: 'huggingface',
             isProOnly: false,
             price: 'Free',
-            quota: 'Free Inference API',
-            health: 100,
-            features: 1,
             capabilities: { text: false, imageGen: true, videoGen: false, voice: false }
         },
         {
@@ -359,57 +318,55 @@ export const getAvailableModels = async (isPro: boolean, freeUserCount: number =
             provider: 'google',
             isProOnly: true,
             price: 'PRO',
-            quota: 'Premium Unlocked',
-            health: 100,
-            features: 1,
             capabilities: { text: false, imageGen: true, videoGen: false, voice: false }
         },
-            {
-                id: VIDEO_GEN_MODEL_ID,
-                name: 'Veo 2 (Video Generation)',
-                provider: 'google',
-                isProOnly: true,
-                price: 'PRO',
-                quota: 'Premium Unlocked',
-                health: 100,
-                features: 1,
-                capabilities: { text: false, imageGen: false, videoGen: true, voice: false }
-            },
-            {
-                // Free by deliberate choice: background/subject editing should have
-                // a free path even though generation (Imagen/Veo) is Pro-only.
-                id: IMAGE_EDIT_MODEL_ID,
-                name: 'Gemini Image Edit (Background/Subject)',
-                provider: 'google',
-                isProOnly: false,
-                price: 'Free',
-                quota: `${Math.floor(GEMINI_FREE_DAILY_LIMIT / freeUserCount)} req/day`,
-                health: 100,
-                features: 1,
-                capabilities: { text: false, imageGen: true, videoGen: false, voice: false }
-            },
-            // Clarify-then-render flow(s): text (clarifying Q&A) AND imageGen
-            // (the confirmed concept render) both apply to every entry here.
-            // Architecture is the only real one today — a future domain is
-            // just one more DOMAIN_CONFIGS object, with no new code here.
-            ...Object.values(DOMAIN_CONFIGS).map(cfg => ({
-                id: cfg.id,
-                name: cfg.displayName,
-                provider: 'google',
-                isProOnly: !!cfg.requiresAddon,
-                price: cfg.requiresAddon ? 'PRO' : 'Free',
-                quota: cfg.requiresAddon ? 'Premium Unlocked' : `${Math.floor(GEMINI_FREE_DAILY_LIMIT / freeUserCount)} req/day`,
-                health: 100,
-                features: 1,
-                capabilities: { text: true, imageGen: true, videoGen: false, voice: false }
-            }))
-        ];
+        {
+            // Free counterpart to Veo — selecting VIDEO_GEN_MODEL_ID without
+            // ai_pro now auto-routes here server-side too (see getAiResponse),
+            // this entry just makes the free option directly selectable/visible
+            // rather than only reachable as an invisible fallback.
+            id: 'huggingface-video',
+            name: 'Hugging Face (Free Text-to-Video)',
+            provider: 'huggingface',
+            isProOnly: false,
+            price: 'Free',
+            capabilities: { text: false, imageGen: false, videoGen: true, voice: false }
+        },
+        {
+            id: VIDEO_GEN_MODEL_ID,
+            name: 'Veo 2 (Video Generation)',
+            provider: 'google',
+            isProOnly: true,
+            price: 'PRO',
+            capabilities: { text: false, imageGen: false, videoGen: true, voice: false }
+        },
+        {
+            // Free by deliberate choice: background/subject editing should have
+            // a free path even though generation (Imagen/Veo) is Pro-only.
+            id: IMAGE_EDIT_MODEL_ID,
+            name: 'Gemini Image Edit (Background/Subject)',
+            provider: 'google',
+            isProOnly: false,
+            price: 'Free',
+            capabilities: { text: false, imageGen: true, videoGen: false, voice: false }
+        },
+        // Clarify-then-render flow(s): text (clarifying Q&A) AND imageGen
+        // (the confirmed concept render) both apply to every entry here.
+        // Architecture is the only real one today — a future domain is
+        // just one more DOMAIN_CONFIGS object, with no new code here.
+        ...Object.values(DOMAIN_CONFIGS).map(cfg => ({
+            id: cfg.id,
+            name: cfg.displayName,
+            provider: 'google',
+            isProOnly: !!cfg.requiresAddon,
+            price: cfg.requiresAddon ? 'PRO' : 'Free',
+            capabilities: { text: true, imageGen: true, videoGen: false, voice: false }
+        }))
+    ];
 
     // Return the full catalog regardless of tier — isProOnly is metadata for the
-    // client to lock/badge against, not a server-side visibility filter. Stripping
-    // pro-only entries here (as this used to do) hid Gemini Pro AND every
-    // OpenRouter premium model from free users entirely, instead of showing them
-    // locked, which is what the drawer's Free/Premium sub-tabs actually expect.
+    // client to lock/badge against, not a server-side visibility filter. The
+    // drawer's Free/Premium sub-tabs filter on isProOnly client-side.
     return models;
 };
 
@@ -477,6 +434,58 @@ export const generateHuggingFaceImage = async (prompt: string, token?: string): 
 };
 
 /**
+ * 🎬 Free Video Generation via Hugging Face Inference API (ModelScope
+ * text-to-video) — the free-tier counterpart to Veo, same keyless pattern as
+ * generateHuggingFaceImage above. Free HF inference models commonly return a
+ * 503 with an `estimated_time` while they cold-start from standby; this is
+ * the normal first-call experience for a low-traffic free model, not an
+ * error condition, so one bounded retry after that wait is part of making
+ * this actually usable rather than "works maybe 1 in 3 tries."
+ */
+export const generateHuggingFaceVideo = async (prompt: string, token?: string): Promise<AiResponse> => {
+    const hfToken = token || process.env.HUGGINGFACE_API_KEY;
+    const hfUrl = 'https://api-inference.huggingface.co/models/damo-vilab/text-to-video-ms-1.7b';
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (hfToken) headers['Authorization'] = `Bearer ${hfToken}`;
+
+    const attempt = async (): Promise<AiResponse> => {
+        const response = await axios.post(
+            hfUrl,
+            { inputs: prompt },
+            { headers, responseType: 'arraybuffer', timeout: 90000 }
+        );
+        const videoUrl = buildMediaUrl(storeMediaBase64(Buffer.from(response.data).toString('base64'), 'video/mp4'));
+        return { content: 'Video generated via Hugging Face (free engine)', provider: 'huggingface-video', success: true, generatedVideoUrl: videoUrl };
+    };
+
+    try {
+        return await attempt();
+    } catch (e: any) {
+        // A cold-starting model answers with JSON (not video bytes), but
+        // responseType:'arraybuffer' means axios hands it back as a Buffer
+        // regardless — have to parse it back to text to read estimated_time.
+        const raw = e.response?.data;
+        let estimatedTime: number | undefined;
+        if (Buffer.isBuffer(raw)) {
+            try { estimatedTime = JSON.parse(raw.toString('utf-8'))?.estimated_time; } catch { /* not JSON — a real failure */ }
+        }
+        if (e.response?.status === 503 && estimatedTime) {
+            const waitMs = Math.min(estimatedTime * 1000, 25000);
+            logger.info(`⏳ Free video engine cold-starting (~${estimatedTime}s) — retrying once...`);
+            await new Promise(r => setTimeout(r, waitMs));
+            try {
+                return await attempt();
+            } catch (retryErr: any) {
+                logger.error('❌ Free video generation failed after retry:', retryErr.message);
+                return { content: '', provider: 'huggingface-video', success: false, error: 'Free video engine is warming up — try again in about a minute.' };
+            }
+        }
+        logger.error('❌ Free video generation error:', e.message);
+        return { content: '', provider: 'huggingface-video', success: false, error: `Free video generation failed: ${e.message}` };
+    }
+};
+
+/**
  * 📄 Real PDF generation for the [FILE_REQUEST: ...] tag. This used to be
  * pure theater: the model was told to emit the tag, and the only thing that
  * happened with it was the client swapping the tag for cosmetic text
@@ -514,6 +523,26 @@ const generatePdfFile = async (title: string, bodyText: string): Promise<{ succe
 
 const sanitizePdfTitle = (title: string): string => title.replace(/[^A-Za-z0-9 _-]/g, '').trim() || 'Mistreal Document';
 
+// 🎨 Image style presets — a fixed set of user-facing labels (not model
+// names), applied as a prompt descriptor so every image engine (Pollinations,
+// HuggingFace, Imagen, BYOK) renders in the style the user actually asked
+// for instead of whatever the base model defaults to. Used both by the
+// explicit image-gen providers below and by attachGeneratedMedia's
+// [INLINE_MEDIA: style=...] tag, so "ask any connected AI to draw something
+// in style X" behaves identically everywhere.
+export const IMAGE_STYLE_DESCRIPTORS: Record<string, string> = {
+    realistic: 'photorealistic, highly detailed, natural lighting, DSLR photo quality',
+    animation: '3D animated movie style, vibrant colors, Pixar/Disney-style rendering',
+    anime: 'anime style, Japanese animation, cel-shaded, vibrant line art',
+    painting: 'digital painting, fine art illustration, expressive brush strokes',
+    sketch: 'pencil sketch, hand-drawn line art, monochrome shading'
+};
+
+const applyImageStyle = (prompt: string, imageStyle?: string): string => {
+    const descriptor = imageStyle ? IMAGE_STYLE_DESCRIPTORS[imageStyle.toLowerCase()] : undefined;
+    return descriptor ? `${prompt}. Style: ${descriptor}.` : prompt;
+};
+
 /**
  * Shared by every chat path (app-key Gemini, every BYOK provider) so "ask
  * any connected AI to draw something" or "...to make me a file" behaves
@@ -531,7 +560,7 @@ const attachGeneratedMedia = async (content: string, provider: string, grounding
     if (inlineMediaMatch) {
         const mediaPrompt = inlineMediaMatch[2].trim();
         const cleanContent = content.replace(inlineMediaMatch[0], '').trim();
-        const imageRes = await generatePollinationsImage(mediaPrompt);
+        const imageRes = await generatePollinationsImage(applyImageStyle(mediaPrompt, inlineMediaMatch[1]));
         if (imageRes.success) {
             return {
                 content: cleanContent, provider, success: true,
@@ -719,9 +748,11 @@ export const getAiResponse = async (
     prompt: string, provider: string, history: any[], user?: any, imageDatas?: string[],
     audioData?: string, videoData?: { base64: string, mimeType: string }, imageRoles?: string[],
     confirmArchRender?: boolean, archUnderstanding?: string, imageMimeTypes?: string[],
-    videoDurationSeconds?: number, videoAspectRatio?: string, videoResolution?: string
+    videoDurationSeconds?: number, videoAspectRatio?: string, videoResolution?: string,
+    imageStyle?: string
 ): Promise<AiResponse> => {
     const geminiKeyForGeneration = process.env.GEMINI_API_KEY;
+    const styledImagePrompt = applyImageStyle(prompt, imageStyle);
     // Scene Mode's keyframe images, pulled out by role rather than position —
     // shared by every video path below (app's own Veo, BYOK video-edit, BYOK
     // video-gen) since all three can make use of a start/end/reference frame.
@@ -757,17 +788,20 @@ export const getAiResponse = async (
         return { content: '', provider: `byok-video:${user.byokVideoProviderType}`, success: true, generatedVideoUrl: videoUrl };
     }
     if (provider === 'pollinations') {
-        return generatePollinationsImage(prompt);
+        return generatePollinationsImage(styledImagePrompt);
     }
     if (provider === 'huggingface') {
-        return generateHuggingFaceImage(prompt);
+        return generateHuggingFaceImage(styledImagePrompt);
+    }
+    if (provider === 'huggingface-video') {
+        return generateHuggingFaceVideo(styledImagePrompt);
     }
     if (provider === IMAGE_GEN_MODEL_ID) {
         // If free user (no ai_pro add-on), route to free Pollinations/HuggingFace engine
         const hasAiPro = user?.deviceId ? await hasAddon(user.deviceId, 'ai_pro') : false;
         if (!hasAiPro && !user?.activeImageGenConfigId) {
             logger.info('🎨 Free user image generation -> routing to Pollinations FLUX.1 free engine');
-            return generatePollinationsImage(prompt);
+            return generatePollinationsImage(styledImagePrompt);
         }
 
         // If the user has a saved+active image-gen provider, use theirs
@@ -775,7 +809,7 @@ export const getAiResponse = async (
             const config = await AiProviderConfig.findOne({ where: { id: user.activeImageGenConfigId, deviceId: user.deviceId } });
             if (config) {
                 const apiKey = decrypt(config.encryptedKey);
-                const result = await ImageGenProvider.generate({ prompt, apiKey, baseUrl: config.baseUrl ?? undefined, modelName: config.modelName ?? undefined });
+                const result = await ImageGenProvider.generate({ prompt: styledImagePrompt, apiKey, baseUrl: config.baseUrl ?? undefined, modelName: config.modelName ?? undefined });
                 if (!result.success) return { content: '', provider: `custom-image:${config.label}`, success: false, error: result.error };
                 if (result.imageBase64) {
                     return { content: '', provider: `custom-image:${config.label}`, success: true, generatedImageBase64: result.imageBase64, generatedImageMimeType: 'image/png' };
@@ -783,10 +817,23 @@ export const getAiResponse = async (
                 return { content: '', provider: `custom-image:${config.label}`, success: true, generatedImageUrl: result.imageUrl };
             }
         }
-        if (!geminiKeyForGeneration) return generatePollinationsImage(prompt);
-        return generateImage(prompt, geminiKeyForGeneration);
+        if (!geminiKeyForGeneration) return generatePollinationsImage(styledImagePrompt);
+        return generateImage(styledImagePrompt, geminiKeyForGeneration);
     }
     if (provider === VIDEO_GEN_MODEL_ID) {
+        // Mirrors IMAGE_GEN_MODEL_ID's hasAddon gate + free-engine fallback
+        // just above — this branch was missing the gate entirely, so any
+        // request with this provider id ran real (billed) Veo generation on
+        // the app's own key regardless of tier. The client hid the option
+        // from free users, but nothing server-side actually enforced that —
+        // a direct/non-UI request could generate unlimited paid video for
+        // free. BYOK still bypasses this, same as every other provider —
+        // that's the user's own key, not ours.
+        const hasAiProForVideo = user?.deviceId ? await hasAddon(user.deviceId, 'ai_pro') : false;
+        if (!hasAiProForVideo && !user?.activeVideoGenConfigId) {
+            logger.info('🎬 Free user video generation -> routing to Hugging Face free engine');
+            return generateHuggingFaceVideo(styledImagePrompt);
+        }
         if (user?.activeVideoGenConfigId) {
             const config = await AiProviderConfig.findOne({ where: { id: user.activeVideoGenConfigId, deviceId: user.deviceId } });
             if (config) {
@@ -805,7 +852,7 @@ export const getAiResponse = async (
             }
         }
         if (!geminiKeyForGeneration) return { content: '', provider, success: false, error: 'Video generation is not configured.' };
-        return generateVideo(prompt, geminiKeyForGeneration, startImageBase64, endImageBase64, videoDurationSeconds, videoAspectRatio, videoResolution);
+        return generateVideo(styledImagePrompt, geminiKeyForGeneration, startImageBase64, endImageBase64, videoDurationSeconds, videoAspectRatio, videoResolution);
     }
     if (provider === IMAGE_EDIT_MODEL_ID) {
         if (!geminiKeyForGeneration) return { content: '', provider, success: false, error: 'Image editing is not configured.' };
@@ -919,6 +966,7 @@ export const getAiResponse = async (
     AI CAPABILITIES:
     - You have internal knowledge up to 2024 and Real-Time Google Search access.
     - If asked to create a PDF or file, append "[FILE_REQUEST: type=pdf, title=FILENAME]" to your response.
+    - If asked to draw, generate, or create an image, append "[INLINE_MEDIA: style=STYLE, prompt=DESCRIPTION]" to your response, where DESCRIPTION is a detailed rendering of what to draw and STYLE is one of: ${Object.keys(IMAGE_STYLE_DESCRIPTORS).join(', ')} (pick "realistic" if the user didn't ask for a specific style). Use this tag SILENTLY — the user only sees the resulting image, never the tag text.
 
     Current Date/Time: ${new Date().toUTCString()}.`;
 

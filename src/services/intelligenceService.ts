@@ -4,7 +4,7 @@ import logger from '../utils/logger';
 import { IntelligenceBuffer, User, SocialEvent } from '../models/userModel';
 import { PinnedIntel } from '../models/PinnedIntel';
 import { getWeatherData } from './weatherService';
-import { getDetailedAstroData, getNasaApod, getSpaceNews } from './astroService';
+import { getDetailedAstroData, getSpaceNews } from './astroService';
 import { getLiveDisasters } from './disasterService';
 import { getOrCreateUserInternal } from '../utils/userResolver';
 
@@ -71,7 +71,15 @@ export class IntelligenceService {
             const astro = (astroBuffer?.items || []).filter((i: any) => !pinnedTitles.includes(i.title)).slice(0, limit);
             const socials = socialItems.filter((i: any) => !pinnedTitles.includes(i.title)).slice(0, limit);
             const sports = (sportsBuffer?.items || []).filter((i: any) => !pinnedTitles.includes(i.title)).slice(0, 15);
-            const disasters = (disasterBuffer?.items || []).filter((i: any) => !pinnedTitles.includes(i.title)).map((d: any) => ({ ...d, type: 'sos_alert' }));
+            // Was 'sos_alert' — collided with the unrelated Guardian dead-man's-
+            // switch broadcast feature (FeedViewModel.fetchNearbySos on the
+            // Android side), which independently tags its own items with that
+            // exact same string. Both rendered through the same card, so every
+            // USGS/GDACS earthquake/hazard alert here was mislabeled as a
+            // "GUARDIAN BROADCAST". Distinct type now; metadata (lat/lon/
+            // severity/disasterType/magnitude, set in refreshDisasters above)
+            // is unchanged.
+            const disasters = (disasterBuffer?.items || []).filter((i: any) => !pinnedTitles.includes(i.title)).map((d: any) => ({ ...d, type: 'disaster_alert' }));
             const markets = (marketBuffer?.items || []).filter((i: any) => !pinnedTitles.includes(i.title)).map((m: any) => ({ ...m, type: 'news' }));
 
             // 6. Interleave Logic (The Rhythm)
@@ -151,6 +159,19 @@ export class IntelligenceService {
         } catch (e: any) {
             logger.error(`❌ Buffer Update Error (${category}): ${e.message}`);
         }
+    }
+
+    /**
+     * True if `category`'s buffer was last updated today (UTC). Used by the
+     * once-a-day feeds (wiki, novels) to skip fetching on every hourly
+     * refreshGlobalIntel tick — those run alongside genuinely-hourly feeds
+     * (news, journals) in the same Promise.all, so the daily cap has to live
+     * inside each of those two functions rather than in the shared schedule.
+     */
+    private static async alreadyRefreshedToday(category: string): Promise<boolean> {
+        const buffer = await IntelligenceBuffer.findOne({ where: { category } });
+        if (!buffer?.lastUpdated) return false;
+        return new Date(buffer.lastUpdated).toISOString().slice(0, 10) === new Date().toISOString().slice(0, 10);
     }
 
     /**
@@ -286,12 +307,22 @@ export class IntelligenceService {
         const apiKey = process.env.NEWS_API_KEY;
         const allArticles: any[] = [];
 
-        // 🏙️ Step 1: Hyper-Local City News via Google News RSS (Keyless, 100% Free)
+        // Shared across every tier below — one lookup, not one per tier.
+        const activeUser = await User.findOne({
+            where: { lastKnownCity: { [Op.ne]: null } },
+            order: [['lastLocationUpdate', 'DESC']]
+        });
+        // lastKnownCountry is ISO 3166-1 alpha-2 (userModel.ts) — NewsAPI wants
+        // it lowercase. This field existed and was already commented "used to
+        // localize news" but nothing ever actually read it; every NewsAPI call
+        // was hardcoded to 'us' regardless of the user's real country.
+        const countryCode = activeUser?.lastKnownCountry?.toLowerCase() || 'us';
+
+        // 🏙️ Tier 1/3: Local (city) — Google News RSS, keyless, 100% free.
+        // Local/Country/World are the three tiers that must always populate,
+        // independent of the topic categories (science/tech/entertainment/sport)
+        // further below — see the 'local'/'country'/'world' category tags.
         try {
-            const activeUser = await User.findOne({
-                where: { lastKnownCity: { [Op.ne]: null } },
-                order: [['lastLocationUpdate', 'DESC']]
-            });
             const city = activeUser?.lastKnownCity || 'World';
             const rssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(city)}&hl=en-US&gl=US&ceid=US:en`;
 
@@ -326,36 +357,89 @@ export class IntelligenceService {
             logger.warn(`⚠️ Google News RSS fetch warning: ${e.message}`);
         }
 
-        // 🌍 Step 2: Global Headlines via NewsAPI if configured
         if (apiKey) {
+            const mapArticles = (articles: any[], category: string) => articles.map((a: any) => ({
+                title: a.title,
+                description: a.description || 'No description available.',
+                url: a.url,
+                imageUrl: a.urlToImage || null,
+                source: a.source?.name || 'News',
+                category,
+                timestamp: a.publishedAt || new Date().toISOString()
+            }));
+
+            // 🌍 Tier 2: Country — the user's actual country's top headlines.
+            // This used to be the hardcoded-'us' call described above.
             try {
-                const categories = ['general', 'technology', 'science'];
+                const countryRes = await axios.get('https://newsapi.org/v2/top-headlines', {
+                    params: { country: countryCode, category: 'general', apiKey },
+                    timeout: 8000
+                });
+                allArticles.push(...mapArticles(countryRes.data?.articles || [], 'country'));
+            } catch (e: any) {
+                logger.warn(`⚠️ NewsAPI country-tier fetch warning: ${e.message}`);
+            }
+
+            // 🌐 Tier 3: World — NewsAPI's 'sources' param can't be combined with
+            // country/category, which is exactly what makes it useful here: a
+            // fixed set of major international wire services, independent of
+            // whichever single country Tier 2 is scoped to.
+            try {
+                const worldRes = await axios.get('https://newsapi.org/v2/top-headlines', {
+                    params: { sources: 'bbc-news,reuters,al-jazeera-english,associated-press', apiKey },
+                    timeout: 8000
+                });
+                allArticles.push(...mapArticles(worldRes.data?.articles || [], 'world'));
+            } catch (e: any) {
+                logger.warn(`⚠️ NewsAPI world-tier fetch warning: ${e.message}`);
+            }
+
+            // 🗂️ Topic categories — separate axis from the local/country/world
+            // tiers above; every one of these should also always populate.
+            // 'entertainment' and 'sport' were previously missing entirely
+            // (the Android dashboard already has a dead ENTERTAINMENT filter
+            // chip with nothing feeding it). NewsAPI's own category enum uses
+            // 'sports', kept as the stored category value for consistency with
+            // that API, even though the live-score 'sports' buffer (TheSportsDB,
+            // refreshSports above) is a completely separate feature from this
+            // sports *news/articles* topic.
+            try {
+                const topicCategories = ['technology', 'science', 'entertainment', 'sports'];
                 const results = await Promise.allSettled(
-                    categories.map(cat =>
-                        axios.get(`https://newsapi.org/v2/top-headlines`, {
-                            params: { category: cat, country: 'us', apiKey },
+                    topicCategories.map(cat =>
+                        axios.get('https://newsapi.org/v2/top-headlines', {
+                            params: { category: cat, country: countryCode, apiKey },
                             timeout: 8000
                         })
                     )
                 );
-
                 results.forEach((res, index) => {
                     if (res.status === 'fulfilled' && res.value.data?.articles) {
-                        const cat = categories[index];
-                        const mapped = res.value.data.articles.map((a: any) => ({
-                            title: a.title,
-                            description: a.description || 'No description available.',
-                            url: a.url,
-                            imageUrl: a.urlToImage || null,
-                            source: a.source?.name || 'News',
-                            category: cat,
-                            timestamp: a.publishedAt || new Date().toISOString()
-                        }));
-                        allArticles.push(...mapped);
+                        allArticles.push(...mapArticles(res.value.data.articles, topicCategories[index]));
                     }
                 });
             } catch (e: any) {
-                logger.warn(`⚠️ NewsAPI fetch warning: ${e.message}`);
+                logger.warn(`⚠️ NewsAPI topic-category fetch warning: ${e.message}`);
+            }
+
+            // 🙏 Religion — not one of NewsAPI's native top-headlines category
+            // values (business/entertainment/general/health/science/sports/
+            // technology), so this uses /v2/everything with a broad,
+            // multi-faith query instead of the category param the topics
+            // above use. Deliberately not scoped to one religion.
+            try {
+                const religionRes = await axios.get('https://newsapi.org/v2/everything', {
+                    params: {
+                        q: 'religion OR faith OR church OR vatican OR christianity OR islam OR judaism OR hinduism OR buddhism',
+                        language: 'en',
+                        sortBy: 'publishedAt',
+                        apiKey
+                    },
+                    timeout: 8000
+                });
+                allArticles.push(...mapArticles(religionRes.data?.articles || [], 'religion'));
+            } catch (e: any) {
+                logger.warn(`⚠️ NewsAPI religion-topic fetch warning: ${e.message}`);
             }
         }
 
@@ -403,21 +487,7 @@ export class IntelligenceService {
         try {
             const astroItems: any[] = [];
 
-            // 1. Fetch NASA Picture of the Day (APOD)
-            const apod = await getNasaApod();
-            if (apod) {
-                astroItems.push({
-                    title: `[NASA APOD] ${apod.title}`,
-                    description: apod.explanation.length > 250 ? apod.explanation.substring(0, 247) + '...' : apod.explanation,
-                    url: apod.hdurl || apod.url,
-                    imageUrl: apod.mediaType === 'image' ? apod.url : null,
-                    source: 'NASA APOD',
-                    timestamp: new Date().toISOString(),
-                    metadata: { apodDate: apod.date, mediaType: apod.mediaType }
-                });
-            }
-
-            // 2. Fetch Live Spaceflight & Orbital News
+            // Fetch Live Spaceflight & Orbital News
             const spaceNews = await getSpaceNews();
             spaceNews.slice(0, 5).forEach(a => {
                 astroItems.push({
@@ -456,15 +526,18 @@ export class IntelligenceService {
 
     private static async refreshWiki() {
         try {
-            // Previously gated to "once per calendar day" via a lastUpdated check,
-            // which meant every hourly refreshGlobalIntel tick after the first
-            // successful one of the day was a silent no-op — wiki only ever
-            // looked "fresh" once every 24h while news/journals/novels refresh
-            // hourly. Removed so it follows the same hourly cadence as the rest
-            // of the feed; updateBuffer's dedupe-by-title already prevents churn
-            // if the random-article endpoint happens to repeat a title.
+            // Deliberately once-per-calendar-day, not every hourly
+            // refreshGlobalIntel tick — this WAS hourly at one point (see git
+            // history), on the reasoning that daily-only looked "stale" next to
+            // news/journals. Put back because hourly meant 3 new random
+            // Wikipedia summaries every hour, up to 24x/day, rotating the
+            // user's "wiki" section out from under them within the same day —
+            // the actual ask is a small, stable daily pick (1-2 a day), not a
+            // feed that happens to call itself "wiki."
+            if (await this.alreadyRefreshedToday('wiki')) return;
+
             const articles: any[] = [];
-            for (let i = 0; i < 3; i++) {
+            for (let i = 0; i < 2; i++) {
                 try {
                     const response = await axios.get('https://en.wikipedia.org/api/rest_v1/page/random/summary', { timeout: 5000 });
                     if (response.data && response.data.title) {
@@ -481,7 +554,10 @@ export class IntelligenceService {
             }
 
             if (articles.length > 0) {
-                await this.updateBuffer('wiki', articles, 5);
+                // maxAgeDays=1, not 5 — with the once-per-day gate above, this
+                // keeps the buffer at exactly today's picks instead of
+                // stacking several days' worth together before they age out.
+                await this.updateBuffer('wiki', articles, 1);
             }
         } catch (e: any) {
             logger.warn(`⚠️ [Intel] refreshWiki failed: ${e.message}`);
@@ -527,7 +603,13 @@ export class IntelligenceService {
         }
     }
 
-    private static async getReadableBookUrl(workKey: string): Promise<string> {
+    // Public (was private) — also used by GET /api/novels/read-url, which
+    // resolves this lazily for one book at a time, only when the user
+    // actually opens it. searchLibrary below deliberately does NOT call
+    // this per-result (20 results x an editions.json lookup each would make
+    // every search multiple seconds slower for links most results will
+    // never need).
+    static async getReadableBookUrl(workKey: string): Promise<string> {
         const catalogUrl = `https://openlibrary.org${workKey}`;
         try {
             const editionsResp = await axios.get(`https://openlibrary.org${workKey}/editions.json`, { timeout: 5000 });
@@ -539,19 +621,52 @@ export class IntelligenceService {
         }
     }
 
+    /**
+     * Searchable ebook archive — OpenLibrary's own search index, not limited
+     * to the small daily-pick buffer refreshLiterature populates. Lightweight
+     * on purpose: no editions.json lookup per result (see getReadableBookUrl's
+     * comment above) — the client resolves a specific book's readable link
+     * only when the user opens it, via GET /api/novels/read-url.
+     */
+    static async searchLibrary(query: string): Promise<any[]> {
+        const response = await axios.get('https://openlibrary.org/search.json', {
+            params: { q: query, limit: 20, fields: 'key,title,author_name,first_publish_year,cover_i' },
+            timeout: 10000
+        });
+        const docs = response.data?.docs || [];
+        return docs.map((d: any) => ({
+            workKey: d.key,
+            title: d.title,
+            author: (d.author_name || []).join(', ') || 'Unknown Author',
+            year: d.first_publish_year || null,
+            imageUrl: d.cover_i ? `https://covers.openlibrary.org/b/id/${d.cover_i}-M.jpg` : null,
+            catalogUrl: `https://openlibrary.org${d.key}`
+        }));
+    }
+
     private static async refreshLiterature() {
         try {
+            // Once-per-calendar-day, same reasoning as refreshWiki just above:
+            // this ran on the hourly refreshGlobalIntel cadence fetching 8 new
+            // random books every hour (up to 192/day), which is "a constantly
+            // rotating library browse," not the "one or few a day" daily pick
+            // that's actually wanted. Real content either way (OpenLibrary
+            // metadata + a link to a readable Archive.org scan when one
+            // exists) — this only changes how often a NEW pick appears, not
+            // where the content comes from.
+            if (await this.alreadyRefreshedToday('novels')) return;
+
             // Dynamic Subject Rotation (scifi, fantasy, mystery, history, tech, etc.) with random offset
             const subjects = ['science_fiction', 'fantasy', 'mystery', 'history', 'technology', 'thriller', 'biography', 'adventure', 'classics', 'philosophy'];
             const randomSubject = subjects[Math.floor(Math.random() * subjects.length)];
             const randomOffset = Math.floor(Math.random() * 15);
 
             const response = await axios.get(`https://openlibrary.org/subjects/${randomSubject}.json`, {
-                params: { limit: 8, offset: randomOffset },
+                params: { limit: 3, offset: randomOffset },
                 timeout: 10000
             });
             const works = response.data?.works || [];
-            const novels = await Promise.all(works.slice(0, 8).map(async (w: any) => {
+            const novels = await Promise.all(works.slice(0, 3).map(async (w: any) => {
                 const authors = (w.authors || []).map((a: any) => a.name).join(', ') || 'Unknown Author';
                 return {
                     title: `[Novel] ${w.title}`,
@@ -564,7 +679,9 @@ export class IntelligenceService {
             }));
 
             if (novels.length > 0) {
-                await this.updateBuffer('novels', novels, 7);
+                // maxAgeDays=1 to match the daily gate above — today's picks
+                // only, not several days stacked together before aging out.
+                await this.updateBuffer('novels', novels, 1);
             }
         } catch (e: any) {
             logger.warn(`⚠️ [Intel] refreshLiterature failed: ${e.message}`);

@@ -290,7 +290,7 @@ app.get('/watch/:sessionId', (req, res) => {
 
 // 🧠 AI Chat
 app.post('/api/chat', upload.fields([{ name: 'images', maxCount: 5 }, { name: 'audio', maxCount: 1 }, { name: 'video', maxCount: 1 }]), validate(chatSchema), async (req, res) => {
-    let { prompt, provider, history, deviceId, firebaseUid, contextMetadata, imageRoles, confirmArchRender, archUnderstanding, videoDurationSeconds, videoAspectRatio, videoResolution } = req.body;
+    let { prompt, provider, history, deviceId, firebaseUid, contextMetadata, imageRoles, confirmArchRender, archUnderstanding, videoDurationSeconds, videoAspectRatio, videoResolution, imageStyle } = req.body;
     const files = req.files as { images?: Express.Multer.File[], audio?: Express.Multer.File[], video?: Express.Multer.File[] };
 
     if (typeof history === 'string') {
@@ -333,29 +333,45 @@ app.post('/api/chat', upload.fields([{ name: 'images', maxCount: 5 }, { name: 'a
         confirmArchRender, archUnderstanding, imageMimeTypes,
         videoDurationSeconds ? parseInt(videoDurationSeconds, 10) : undefined,
         videoAspectRatio || undefined,
-        videoResolution || undefined
+        videoResolution || undefined,
+        imageStyle || undefined
     );
 
     // 🛡️ AI NOTE: If you overhaul or fix logic here, log it in the "History & Notes" column of the Master Map.
     res.json(response);
 });
 
-// 🔍 Model Catalog — gated on the specific ai_pro add-on, not generic isPro
-// (which only means "has any add-on at all" — see addonService.ts).
+// 🔍 Model Catalog — static Free/Premium list. isProOnly is metadata for the
+// client to lock/badge against (see getAvailableModels), so this route does
+// no per-user lookup.
 app.get('/api/models', async (req, res) => {
-    const { deviceId } = req.query;
-    let hasAiPro = false;
-    if (deviceId) {
-        await getOrCreateUserInternal(String(deviceId));
-        hasAiPro = await hasAddon(String(deviceId), 'ai_pro');
-    }
-
-    // 🛡️ Tactical Quota Calculation: Count total users to split shared resources
-    const freeUserCount = await User.count({ where: { isPro: false } }) || 1;
-    const proUserCount = await User.count({ where: { isPro: true } }) || 1;
-
-    const models = await getAvailableModels(hasAiPro, freeUserCount, proUserCount);
+    const models = await getAvailableModels();
     res.json(models);
+});
+
+// 📚 Searchable ebook archive (OpenLibrary) — separate from the small
+// daily-pick 'novels' buffer (refreshLiterature), which stays a passive feed
+// item; this is the user actively searching for a specific book.
+app.get('/api/novels/search', async (req, res) => {
+    const { q } = req.query;
+    if (!q || typeof q !== 'string') return res.status(400).json({ error: 'q is required' });
+    try {
+        const results = await IntelligenceService.searchLibrary(q);
+        res.json(results);
+    } catch (e: any) {
+        logger.warn(`⚠️ Novel search warning: ${e.message}`);
+        res.status(502).json({ error: 'Library search failed.' });
+    }
+});
+
+// Resolves one book's readable link (an Archive.org scan if one exists, else
+// the OpenLibrary catalog page) — deliberately lazy, called only when the
+// user opens a specific search result, not for every result in a search.
+app.get('/api/novels/read-url', async (req, res) => {
+    const { workKey } = req.query;
+    if (!workKey || typeof workKey !== 'string') return res.status(400).json({ error: 'workKey is required' });
+    const url = await IntelligenceService.getReadableBookUrl(workKey);
+    res.json({ url });
 });
 
 // 📱 Legacy Social Routes (kept for backward compatibility, ideally move to socialRoutes)

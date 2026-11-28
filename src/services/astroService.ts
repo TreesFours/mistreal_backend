@@ -94,38 +94,6 @@ export const getDetailedAstroData = async (lat: number = 0, lon: number = 0) => 
     }
 };
 
-export interface NasaApodData {
-    title: string;
-    explanation: string;
-    url: string;
-    hdurl?: string;
-    mediaType: string;
-    date: string;
-}
-
-export const getNasaApod = async (): Promise<NasaApodData | null> => {
-    const nasaKey = process.env.NASA_API_KEY || 'DEMO_KEY';
-    try {
-        const response = await axios.get('https://api.nasa.gov/planetary/apod', {
-            params: { api_key: nasaKey },
-            timeout: 10000
-        });
-        const data = response.data;
-        if (!data || !data.title) return null;
-        return {
-            title: data.title,
-            explanation: data.explanation || 'NASA Astronomy Picture of the Day',
-            url: data.url,
-            hdurl: data.hdurl || data.url,
-            mediaType: data.media_type || 'image',
-            date: data.date || new Date().toISOString().split('T')[0]
-        };
-    } catch (e: any) {
-        logger.warn(`⚠️ [Astro] getNasaApod failed: ${e.message}`);
-        return null;
-    }
-};
-
 export interface SpaceNewsArticle {
     title: string;
     summary: string;
@@ -227,9 +195,31 @@ export const getJplObserverData = async (bodyId: string, lat: number, lon: numbe
         }
 
         let description = "";
+        // Horizons' physical-data block is two "Label = value" columns per
+        // line (column boundary: 2+ spaces) for most bodies — not a
+        // guaranteed-stable format across every body type (Sun/planet/moon/
+        // asteroid blocks vary in which fields they even have), so this is a
+        // best-effort enrichment on top of `description`, which stays the
+        // reliable plain-text fallback either way.
+        const physicalData: Record<string, string> = {};
         const descMatch = result.match(/PHYSICAL DATA([\s\S]*?)----/);
         if (descMatch) {
-            description = descMatch[1].trim().split('\n').slice(0, 5).join('; ');
+            const rawLines = descMatch[1].trim().split('\n').filter((l: string) => l.trim().length > 0);
+            // Was truncated to the first 5 lines regardless of block length —
+            // these blocks run ~6-10 lines, so most bodies were silently
+            // losing real data (e.g. mass, density) past that cutoff.
+            description = rawLines.join('; ');
+
+            rawLines.forEach((line: string) => {
+                line.split(/\s{2,}/).filter(Boolean).forEach((chunk: string) => {
+                    const eqIndex = chunk.indexOf('=');
+                    if (eqIndex > 0) {
+                        const label = chunk.slice(0, eqIndex).trim();
+                        const value = chunk.slice(eqIndex + 1).trim();
+                        if (label && value) physicalData[label] = value;
+                    }
+                });
+            });
         }
 
         const orientation = getCompassDirection(azimuth);
@@ -269,7 +259,19 @@ export const getJplObserverData = async (bodyId: string, lat: number, lon: numbe
             '99942': { name: 'Apophis', category: 'asteroid' }
         };
 
-        const meta = bodyCatalog[bodyId] || { name: `Celestial Body ${bodyId}`, category: 'asteroid' };
+        // bodyCatalog above is a display-only shortcut for common bodies, not
+        // the thing that makes a body fetchable — COMMAND: bodyId above
+        // already queries Horizons for whatever valid JPL body code is
+        // passed in, catalog entry or not. For an id not in the dict,
+        // Horizons' own response header names the target ("Target body
+        // name: 433 Eros (2000 EM26) {...}") — read that instead of falling
+        // back to a generic placeholder, so a body this file has never heard
+        // of still gets its real name with zero code changes required.
+        const liveNameMatch = result.match(/Target body name:\s*([^\n{]+)/);
+        const meta = bodyCatalog[bodyId] || {
+            name: liveNameMatch ? liveNameMatch[1].trim() : `Celestial Body ${bodyId}`,
+            category: 'asteroid'
+        };
 
         return {
             body: bodyId,
@@ -281,6 +283,13 @@ export const getJplObserverData = async (bodyId: string, lat: number, lon: numbe
             distEarth,
             distSun,
             description: description || `${meta.name} ephemeris tracked via JPL Horizons vector coordinate system.`,
+            // Structured enrichment of the same PHYSICAL DATA block `description`
+            // already summarizes — e.g. mass, mean radius, density, rotation
+            // period — whatever Horizons actually published for this specific
+            // body (varies by body type, can be empty for some asteroids).
+            // JPL Horizons has no imagery endpoint at all — there is no
+            // artwork/photo field this API can ever supply.
+            physicalData,
             relativeToMoon,
             status: elevation > 0 ? "Visible" : "Below Horizon"
         };
